@@ -133,6 +133,7 @@ struct TaskListView: View {
         }
         .frame(minWidth: 280, minHeight: 320)
         .background(GlassBackground(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
         .containerShape(RoundedRectangle(cornerRadius: 16))
         .opacity(windowOpacity)
         .onChange(of: enableShadows) { newValue in
@@ -226,12 +227,29 @@ struct TaskItemRow: View {
             }
 
             // Text field
-            TextField("Task...", text: $item.content, onCommit: onChange)
-                .textFieldStyle(PlainTextFieldStyle())
-                .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: .rounded))
-                .italic(item.isItalic)
-                .strikethrough(item.isCompleted || item.isStrikethrough, color: .secondary)
-                .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
+            ZStack(alignment: .leading) {
+                // Invisible text just to render a perfectly sized strikethrough line
+                if item.isCompleted || item.isStrikethrough {
+                    Text(item.content.isEmpty ? "Task..." : item.content)
+                        .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
+                        .italic(item.isItalic)
+                        .foregroundColor(.clear)
+                        .overlay(
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.8))
+                                .frame(height: 1)
+                                .offset(y: 1),
+                            alignment: .center
+                        )
+                }
+
+                TextField("Task...", text: $item.content, onCommit: onChange)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
+                    .italic(item.isItalic)
+                    .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
+            }
+            .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
 
             // Priority Tag
             if item.priority != .none {

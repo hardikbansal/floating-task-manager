@@ -17,9 +17,9 @@ struct GlassBackground: View {
     
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(Color.white.opacity(0.03))
+            .fill(Color.white.opacity(0.85))
             .background(
-                VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                VisualEffectView(material: .popover, blendingMode: .behindWindow)
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             )
             .overlay(
@@ -121,8 +121,12 @@ struct VisualEffectView: NSViewRepresentable {
     let material: NSVisualEffectView.Material
     let blendingMode: NSVisualEffectView.BlendingMode
 
+    class DraggableVisualEffectView: NSVisualEffectView {
+        override var mouseDownCanMoveWindow: Bool { return true }
+    }
+
     func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
+        let view = DraggableVisualEffectView()
         view.material = material
         view.blendingMode = blendingMode
         view.state = .active

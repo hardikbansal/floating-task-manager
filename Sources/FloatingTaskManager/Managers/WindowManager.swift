@@ -85,13 +85,20 @@ class WindowManager: NSObject, ObservableObject {
     }
 
     func createListWindow(for list: TaskList, store: TaskStore) {
+        class BorderlessListWindow: NSWindow {
+            override var canBecomeKey: Bool { return true }
+            override var canBecomeMain: Bool { return true }
+        }
+
         let origin = list.position == .zero ? randomPosition() : list.position
-        let window = NSWindow(
+        let window = BorderlessListWindow(
+
             contentRect: NSRect(origin: origin, size: list.size),
             styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
+        window.isOpaque = false
         window.level = .floating
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear

@@ -179,9 +179,21 @@ struct ListsPanel: View {
                     windowManager.showSettingsWindowManual()
                     showPanel = false
                 }
+                
+                let screens = NSScreen.screens
+                if screens.count > 1 {
+                    ForEach(0..<screens.count, id: \.self) { index in
+                        QuickActionButton(title: "To Screen \(index + 1)", icon: "display") {
+                            windowManager.moveAllWindows(to: screens[index])
+                            showPanel = false
+                        }
+                    }
+                }
+                
                 QuickActionButton(title: "Quit", icon: "power", color: .red) {
                     NSApp.terminate(nil)
                 }
+
             }
             .padding(12)
         }
