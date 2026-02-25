@@ -7,6 +7,7 @@ struct TaskListView: View {
     @ObservedObject var list: TaskList
     @EnvironmentObject var store: TaskStore
     @EnvironmentObject var windowManager: WindowManager
+    @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
     @State private var newItemContent: String = ""
     @State private var isHoveringHeader = false
     @State private var showColorPicker = false
@@ -73,7 +74,7 @@ struct TaskListView: View {
                     .font(.system(size: 13))
                 TextField("Add task...", text: $newItemContent)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 13))
+                    .font(.system(size: baseFontSize))
                     .onSubmit { addItem() }
             }
             .padding(.horizontal, 14)
@@ -149,32 +150,67 @@ struct ColorSwatchPicker: View {
     }
 }
 
-// MARK: - Task Item Row
+import UserNotifications
 
 struct TaskItemRow: View {
     @Binding var item: TaskItem
+    @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
     var onDelete: () -> Void
     var onChange: () -> Void
 
     @State private var rowHovered = false
+    @State private var showReminderPicker = false
+    @State private var tempReminderDate = Date()
+
+    private var notificationCenter: UNUserNotificationCenter? {
+        guard Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") else {
+            return nil
+        }
+        return UNUserNotificationCenter.current()
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             // Checkbox
-            Button(action: { item.isCompleted.toggle(); onChange() }) {
+            Button(action: { 
+                item.isCompleted.toggle()
+                if item.isCompleted {
+                    removeReminder()
+                }
+                onChange() 
+            }) {
                 Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                     .foregroundColor(item.isCompleted ? .blue : .secondary)
-                    .font(.system(size: 15))
+                    .font(.system(size: baseFontSize + 2))
             }
             .buttonStyle(PlainButtonStyle())
+
+            // Reminder Indicator
+            if let reminder = item.reminderDate, !item.isCompleted {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 8))
+                    .foregroundColor(reminder < Date() ? .red : .blue)
+                    .help("Reminder: \(reminder.formatted())")
+            }
 
             // Text field
             TextField("Task...", text: $item.content, onCommit: onChange)
                 .textFieldStyle(PlainTextFieldStyle())
-                .font(.system(size: 13, weight: item.isBold ? .bold : .regular))
+                .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .regular))
                 .italic(item.isItalic)
                 .strikethrough(item.isCompleted || item.isStrikethrough, color: .secondary)
                 .foregroundColor(item.isCompleted ? .secondary : .primary)
+
+            // Priority Tag
+            if item.priority != .none {
+                Text(item.priority.title.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(item.priority.color.opacity(0.15))
+                    .foregroundColor(item.priority.color)
+                    .cornerRadius(4)
+            }
 
             // Format toolbar — single onHover on row keeps this flicker-free
             if rowHovered {
@@ -182,6 +218,77 @@ struct TaskItemRow: View {
                     FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           onChange() }
                     FormatToggle(icon: "italic",         active: item.isItalic)          { item.isItalic.toggle();         onChange() }
                     FormatToggle(icon: "strikethrough",  active: item.isStrikethrough)   { item.isStrikethrough.toggle();  onChange() }
+                    
+                    Divider().frame(height: 12).padding(.horizontal, 1)
+
+                    // Reminder Button
+                    Button(action: { 
+                        tempReminderDate = item.reminderDate ?? Date().addingTimeInterval(3600)
+                        showReminderPicker.toggle() 
+                    }) {
+                        Image(systemName: item.reminderDate == nil ? "bell" : "bell.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(item.reminderDate == nil ? .secondary : .blue)
+                            .frame(width: 20, height: 20)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(item.reminderDate != nil ? Color.blue.opacity(0.1) : Color.clear))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .popover(isPresented: $showReminderPicker) {
+                        VStack(spacing: 8) {
+                            Text("Set Reminder")
+                                .font(.system(size: 11, weight: .bold))
+                            
+                            DatePicker("", selection: $tempReminderDate)
+                                .datePickerStyle(GraphicalDatePickerStyle())
+                                .labelsHidden()
+                                .frame(width: 260)
+
+                            HStack {
+                                if item.reminderDate != nil {
+                                    Button("Clear") {
+                                        removeReminder()
+                                        showReminderPicker = false
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .foregroundColor(.red)
+                                }
+                                Spacer()
+                                Button("Cancel") { showReminderPicker = false }
+                                    .buttonStyle(.borderless)
+                                Button("Set") {
+                                    setReminder(at: tempReminderDate)
+                                    showReminderPicker = false
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(12)
+                    }
+                    
+                    Divider().frame(height: 12).padding(.horizontal, 1)
+                    
+                    // Priority Picker
+                    Menu {
+                        ForEach(Priority.allCases, id: \.self) { p in
+                            Button(action: { item.priority = p; onChange() }) {
+                                HStack {
+                                    Text(p.title)
+                                    if item.priority == p {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(item.priority == .none ? .secondary : item.priority.color)
+                            .frame(width: 20, height: 20)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(item.priority != .none ? item.priority.color.opacity(0.1) : Color.clear))
+                    }
+                    .fixedSize()
+
                     Divider().frame(height: 12).padding(.horizontal, 1)
                     Button(action: onDelete) {
                         Image(systemName: "trash")
@@ -200,6 +307,33 @@ struct TaskItemRow: View {
                 .fill(rowHovered ? Color.primary.opacity(0.06) : Color.clear)
         )
         .onHover { rowHovered = $0 }   // single hover — no flicker
+    }
+
+    private func setReminder(at date: Date) {
+        item.reminderDate = date
+        onChange()
+
+        guard notificationCenter != nil else {
+            print("⚠️ Cannot schedule notification: Not in an app bundle.")
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Task Reminder"
+        content.body = item.content
+        content.sound = .default
+
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+
+        let request = UNNotificationRequest(identifier: item.id.uuidString, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    private func removeReminder() {
+        item.reminderDate = nil
+        onChange()
+        notificationCenter?.removePendingNotificationRequests(withIdentifiers: [item.id.uuidString])
     }
 }
 

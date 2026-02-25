@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
 import Carbon
+import UserNotifications
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var store = TaskStore()
     private var globalHotKey: EventHotKeyRef?
+    private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Run as accessory - no dock icon, stays floating
@@ -12,11 +14,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         WindowManager.shared.setTaskStore(store)
         WindowManager.shared.showFloatingButton()
+        requestNotificationPermission()
 
         for list in store.lists {
             WindowManager.shared.createListWindow(for: list, store: store)
         }
 
+        setupSystemTray()
         setupGlobalShortcut()
 
         // Hide the default WindowGroup window
@@ -59,6 +63,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Cmd (cmdKey = 256) + Shift (shiftKey = 512) + N (keycode 45)
         RegisterEventHotKey(UInt32(45), UInt32(cmdKey + shiftKey), hotKeyID,
                             GetApplicationEventTarget(), 0, &globalHotKey)
+    }
+
+    private func setupSystemTray() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: "list.bullet.rectangle.portrait", accessibilityDescription: "Floating Task Manager")
+        }
+        
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Show All Lists", action: #selector(showAllLists), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Hide All Windows", action: #selector(hideAllWindows), keyEquivalent: "h"))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        
+        statusItem?.menu = menu
+    }
+
+    @objc private func showAllLists() {
+        for list in store.lists {
+            WindowManager.shared.openOrFocusListWindow(for: list, store: store)
+        }
+    }
+
+    @objc private func hideAllWindows() {
+        for list in store.lists {
+            WindowManager.shared.closeListWindow(for: list.id)
+        }
+    }
+
+    private func requestNotificationPermission() {
+        // UNUserNotificationCenter.current() crashes if not running in a proper App Bundle
+        // (e.g. when run directly from .build/debug via CLI)
+        guard Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") else {
+            print("⚠️ Skipped notification permission request: Not running in a proper App Bundle.")
+            return
+        }
+
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if granted {
+                print("Notification permission granted.")
+            } else if let error = error {
+                print("Notification permission error: \(error.localizedDescription)")
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

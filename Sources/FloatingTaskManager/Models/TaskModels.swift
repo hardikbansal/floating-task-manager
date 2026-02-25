@@ -35,6 +35,30 @@ enum ListColor: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - Priority
+
+enum Priority: String, Codable, CaseIterable {
+    case none, low, medium, high
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .none: return .secondary
+        case .low: return .blue
+        case .medium: return .orange
+        case .high: return .red
+        }
+    }
+}
+
 // MARK: - Task Item
 
 struct TaskItem: Identifiable, Codable, Equatable {
@@ -44,6 +68,8 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var isBold: Bool = false
     var isItalic: Bool = false
     var isStrikethrough: Bool = false
+    var priority: Priority = .none
+    var reminderDate: Date?
 }
 
 // MARK: - Task List
@@ -75,9 +101,9 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id       = try container.decode(UUID.self,      forKey: .id)
         title    = try container.decode(String.self,    forKey: .title)
-        items    = try container.decode([TaskItem].self, forKey: .items)
-        position = try container.decode(CGPoint.self,   forKey: .position)
-        size     = try container.decode(CGSize.self,    forKey: .size)
+        items    = (try? container.decode([TaskItem].self, forKey: .items)) ?? []
+        position = (try? container.decode(CGPoint.self,   forKey: .position)) ?? .zero
+        size     = (try? container.decode(CGSize.self,    forKey: .size)) ?? CGSize(width: 300, height: 400)
         color    = (try? container.decode(ListColor.self, forKey: .color)) ?? .blue
     }
 

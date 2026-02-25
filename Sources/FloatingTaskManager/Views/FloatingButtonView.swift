@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct FloatingButtonView: View {
+    @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
     @EnvironmentObject var store: TaskStore
     @EnvironmentObject var windowManager: WindowManager
     @State private var isHovered = false
@@ -41,6 +42,7 @@ struct FloatingButtonView: View {
 // MARK: - All Lists Panel
 
 struct ListsPanel: View {
+    @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
     @EnvironmentObject var store: TaskStore
     @EnvironmentObject var windowManager: WindowManager
     @Binding var showPanel: Bool
@@ -93,6 +95,29 @@ struct ListsPanel: View {
                 }
                 .frame(maxHeight: 320)
             }
+
+            Divider()
+
+            // Settings Section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "textformat.size")
+                        .font(.system(size: 11))
+                    Text("Text Size: \(Int(baseFontSize))pt")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                }
+                .foregroundColor(.secondary)
+
+                Slider(value: Binding(
+                    get: { baseFontSize },
+                    set: { baseFontSize = $0 }
+                ), in: 10...24, step: 1)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.primary.opacity(0.03))
         }
         .frame(width: 260)
         .background(VisualEffectView(material: .menu, blendingMode: .behindWindow))
