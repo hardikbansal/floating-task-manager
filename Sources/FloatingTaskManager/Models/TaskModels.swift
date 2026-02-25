@@ -57,6 +57,15 @@ enum Priority: String, Codable, CaseIterable {
         case .high: return .red
         }
     }
+
+    var numericValue: Int {
+        switch self {
+        case .none: return 0
+        case .low: return 1
+        case .medium: return 2
+        case .high: return 3
+        }
+    }
 }
 
 // MARK: - Task Item
@@ -81,6 +90,7 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
     @Published var position: CGPoint = .zero
     @Published var size: CGSize = CGSize(width: 300, height: 400)
     @Published var color: ListColor = .blue
+    @Published var sortDescending: Bool = true
 
     init(id: UUID = UUID(), title: String, items: [TaskItem] = [],
          position: CGPoint = .zero, size: CGSize = CGSize(width: 300, height: 400),
@@ -91,10 +101,11 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         self.position = position
         self.size = size
         self.color = color
+        self.sortDescending = true
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, items, position, size, color
+        case id, title, items, position, size, color, sortDescending
     }
 
     required init(from decoder: Decoder) throws {
@@ -105,6 +116,7 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         position = (try? container.decode(CGPoint.self,   forKey: .position)) ?? .zero
         size     = (try? container.decode(CGSize.self,    forKey: .size)) ?? CGSize(width: 300, height: 400)
         color    = (try? container.decode(ListColor.self, forKey: .color)) ?? .blue
+        sortDescending = (try? container.decode(Bool.self, forKey: .sortDescending)) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -115,6 +127,21 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         try container.encode(position, forKey: .position)
         try container.encode(size,     forKey: .size)
         try container.encode(color,    forKey: .color)
+        try container.encode(sortDescending, forKey: .sortDescending)
+    }
+
+    func sortItemsByPriority() {
+        items.sort { (a, b) -> Bool in
+            if a.isCompleted != b.isCompleted {
+                return !a.isCompleted // Incomplete first
+            }
+            if a.priority.numericValue != b.priority.numericValue {
+                return sortDescending ? 
+                    a.priority.numericValue > b.priority.numericValue : // High priority first
+                    a.priority.numericValue < b.priority.numericValue   // Low priority first
+            }
+            return a.content < b.content // Alphabetical as tie-breaker
+        }
     }
 
     static func == (lhs: TaskList, rhs: TaskList) -> Bool {

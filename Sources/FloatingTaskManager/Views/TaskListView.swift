@@ -8,6 +8,8 @@ struct TaskListView: View {
     @EnvironmentObject var store: TaskStore
     @EnvironmentObject var windowManager: WindowManager
     @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
+    @AppStorage("windowOpacity") var windowOpacity: Double = 0.95
+    @AppStorage("enableShadows") var enableShadows: Bool = true
     @State private var newItemContent: String = ""
     @State private var isHoveringHeader = false
     @State private var showColorPicker = false
@@ -37,18 +39,31 @@ struct TaskListView: View {
 
                 Spacer()
 
+                // Sort button (Always Visible)
+                Button(action: { 
+                    list.sortDescending.toggle()
+                    list.sortItemsByPriority()
+                    store.save() 
+                }) {
+                    Image(systemName: list.sortDescending ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(list.color.swiftUIColor)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(list.sortDescending ? "Sort: High to Low" : "Sort: Low to High")
+                .padding(.trailing, 4)
+
+                // Close button (Always Visible)
                 Button(action: { windowManager.closeListWindow(for: list.id) }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15))
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .opacity(isHoveringHeader ? 1.0 : 0.45)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(list.color.swiftUIColor.opacity(0.12))
-            .onHover { isHoveringHeader = $0 }
 
             Divider().opacity(0.25)
 
@@ -100,8 +115,15 @@ struct TaskListView: View {
         .frame(minWidth: 270, minHeight: 300)
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                .opacity(windowOpacity)
                 .ignoresSafeArea()
         )
+        .onChange(of: enableShadows) { newValue in
+            windowManager.updateWindowsAppearance()
+        }
+        .onChange(of: windowOpacity) { _ in
+            windowManager.updateWindowsAppearance()
+        }
     }
 
     private func addItem() {

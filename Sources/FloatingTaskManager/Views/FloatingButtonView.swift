@@ -118,17 +118,80 @@ struct ListsPanel: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(Color.primary.opacity(0.03))
+
+            Divider()
+
+            // Menu Actions
+            VStack(spacing: 0) {
+                MenuActionButton(title: "Show All Lists", icon: "macwindow.on.rectangle") {
+                    for list in store.lists { windowManager.openOrFocusListWindow(for: list, store: store) }
+                    showPanel = false
+                }
+                MenuActionButton(title: "Hide All Windows", icon: "window.casement") {
+                    for list in store.lists { windowManager.closeListWindow(for: list.id) }
+                    showPanel = false
+                }
+                
+                let screens = NSScreen.screens
+                if screens.count > 1 {
+                    Divider().padding(.horizontal, 10)
+                    ForEach(0..<screens.count, id: \.self) { index in
+                        MenuActionButton(title: "Move All to Screen \(index + 1)", icon: "display") {
+                            windowManager.moveAllWindows(to: screens[index])
+                            showPanel = false
+                        }
+                    }
+                }
+                
+                Divider().padding(.horizontal, 10)
+                
+                MenuActionButton(title: "Settings...", icon: "gearshape") {
+                    windowManager.showSettingsWindowManual()
+                    showPanel = false
+                }
+                MenuActionButton(title: "Quit", icon: "power", color: .red) {
+                    NSApp.terminate(nil)
+                }
+            }
+            .padding(.vertical, 4)
         }
         .frame(width: 260)
         .background(VisualEffectView(material: .menu, blendingMode: .behindWindow))
     }
-
+    
     private func createNewList() {
         store.createNewList()
         if let last = store.lists.last {
             windowManager.openOrFocusListWindow(for: last, store: store)
         }
         showPanel = false
+    }
+}
+
+struct MenuActionButton: View {
+    let title: String
+    let icon: String
+    var color: Color = .primary
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 12))
+                Spacer()
+            }
+            .foregroundColor(color.opacity(isHovered ? 1.0 : 0.8))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovered = $0 }
     }
 }
 

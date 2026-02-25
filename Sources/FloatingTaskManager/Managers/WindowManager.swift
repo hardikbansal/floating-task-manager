@@ -8,6 +8,8 @@ class WindowManager: NSObject, ObservableObject {
     private var windows: [UUID: NSWindow] = [:]
     // Published set of open list IDs so views can observe open/close state
     @Published private(set) var openWindowIDs: Set<UUID> = []
+    private var floatingButtonID: UUID?
+    private var settingsWindow: NSWindow?
     var taskStore: TaskStore?
 
     func setTaskStore(_ store: TaskStore) {
@@ -39,7 +41,7 @@ class WindowManager: NSObject, ObservableObject {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.level = .floating
-        window.hasShadow = false
+        window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
         window.isMovableByWindowBackground = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
 
@@ -57,7 +59,10 @@ class WindowManager: NSObject, ObservableObject {
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
-        windows[UUID()] = window        // floating button has a random key
+        
+        let buttonID = UUID()
+        self.floatingButtonID = buttonID
+        windows[buttonID] = window
     }
 
     // MARK: - List Windows
@@ -86,6 +91,7 @@ class WindowManager: NSObject, ObservableObject {
         window.level = .floating
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
+        window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
 
         window.contentView = NSHostingView(rootView:
@@ -118,6 +124,84 @@ class WindowManager: NSObject, ObservableObject {
                 self?.windows.removeValue(forKey: list.id)
                 self?.openWindowIDs.remove(list.id)
         }
+    }
+
+    /// Refresh appearance of all managed windows
+    func updateWindowsAppearance() {
+        let enableShadows = UserDefaults.standard.bool(forKey: "enableShadows")
+        for window in windows.values {
+            window.hasShadow = enableShadows
+            window.invalidateShadow()
+        }
+    }
+
+    func showSettingsWindowManual() {
+        if let existing = settingsWindow {
+            existing.makeKeyAndOrderFront(nil)
+            existing.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.center()
+        window.title = "Floating Task Manager Settings"
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.backgroundColor = .windowBackgroundColor
+        
+        window.contentView = NSHostingView(rootView:
+            SettingsView()
+                .padding()
+                .frame(width: 480, height: 320)
+        )
+
+        self.settingsWindow = window
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                self?.settingsWindow = nil
+        }
+    }
+
+    /// Move all managed windows to the specified screen preserving relative positions
+    func moveAllWindows(to targetScreen: NSScreen) {
+        let targetVisibleFrame = targetScreen.visibleFrame
+        let managedWindows = windows.filter { $0.key != floatingButtonID }
+        
+        for (id, window) in managedWindows {
+            let currentScreen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+            let currentVisibleFrame = currentScreen.visibleFrame
+            
+            // Calculate relative position as percentages of the visible frame
+            let relativeX = (window.frame.minX - currentVisibleFrame.minX) / currentVisibleFrame.width
+            let relativeY = (window.frame.minY - currentVisibleFrame.minY) / currentVisibleFrame.height
+            
+            // Apply percentages to the target visible frame
+            var newX = targetVisibleFrame.minX + (relativeX * targetVisibleFrame.width)
+            var newY = targetVisibleFrame.minY + (relativeY * targetVisibleFrame.height)
+            
+            // Ensure the window stays within the target screen's visible area
+            newX = max(targetVisibleFrame.minX, min(newX, targetVisibleFrame.maxX - window.frame.width))
+            newY = max(targetVisibleFrame.minY, min(newY, targetVisibleFrame.maxY - window.frame.height))
+            
+            let newOrigin = NSPoint(x: newX, y: newY)
+            window.setFrameOrigin(newOrigin)
+            
+            // Update the store if it's a list
+            if let list = taskStore?.lists.first(where: { $0.id == id }) {
+                list.position = newOrigin
+            }
+        }
+        taskStore?.save()
     }
 
     /// Close a list window without deleting the list.

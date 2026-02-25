@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         WindowManager.shared.setTaskStore(store)
         WindowManager.shared.showFloatingButton()
         requestNotificationPermission()
+        setupAppIcon()
 
         for list in store.lists {
             WindowManager.shared.createListWindow(for: list, store: store)
@@ -81,6 +82,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Hide All Windows", action: #selector(hideAllWindows), keyEquivalent: "h"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
+        
+        // Move to Monitor Menu
+        let screens = NSScreen.screens
+        if screens.count > 1 {
+            let monitorMenu = NSMenu()
+            for (index, _) in screens.enumerated() {
+                let item = NSMenuItem(title: "Screen \(index + 1)", action: #selector(moveToScreen(_:)), keyEquivalent: "")
+                item.tag = index
+                monitorMenu.addItem(item)
+            }
+            let monitorItem = NSMenuItem(title: "Move All to Monitor", action: nil, keyEquivalent: "")
+            monitorItem.submenu = monitorMenu
+            menu.addItem(monitorItem)
+        }
+        
+        // Debug Menu
+        let debugMenu = NSMenu()
+        debugMenu.addItem(NSMenuItem(title: "Print Window List to Logs", action: #selector(debugListWindows), keyEquivalent: ""))
+        debugMenu.addItem(NSMenuItem(title: "Force Cleanup Ghost Windows", action: #selector(forceCleanup), keyEquivalent: ""))
+        let debugItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
+        debugItem.submenu = debugMenu
+        menu.addItem(debugItem)
+        
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         
@@ -100,8 +124,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        NSApp.activate(ignoringOtherApps: true)
+        WindowManager.shared.showSettingsWindowManual()
+    }
+
+    @objc private func moveToScreen(_ sender: NSMenuItem) {
+        let screens = NSScreen.screens
+        if sender.tag < screens.count {
+            WindowManager.shared.moveAllWindows(to: screens[sender.tag])
+        }
+    }
+
+    @objc private func debugListWindows() {
+        print("🔍 Debug: Window List")
+        for window in NSApp.windows {
+            let isManaged = WindowManager.shared.isManaged(window)
+            print("🪟 [\(isManaged ? "MANAGED" : "UNMANAGED")] '\(window.title)' | frame: \(window.frame) | level: \(window.level.rawValue) | alpha: \(window.alphaValue) | isVisible: \(window.isVisible)")
+        }
+    }
+
+    @objc private func forceCleanup() {
+        print("🧹 Force cleaning up ghost windows...")
+        for window in NSApp.windows {
+            if !WindowManager.shared.isManaged(window) && window.frame.width > 100 {
+                print("🚪 Closing ghost window: '\(window.title)'")
+                window.close()
+            }
+        }
     }
 
     private func requestNotificationPermission() {
@@ -123,6 +171,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
+    }
+
+    private func setupAppIcon() {
+        // Find AppIcon.png relative to the binary
+        let bundlePath = Bundle.main.bundlePath
+        let iconPath = (bundlePath as NSString).appendingPathComponent("Contents/Resources/AppIcon.png")
+        
+        // Fallback for running from CLI/Debug folder
+        let localPath = "Sources/FloatingTaskManager/AppIcon.png"
+        
+        if let image = NSImage(contentsOfFile: iconPath) ?? NSImage(contentsOfFile: localPath) {
+            NSApp.applicationIconImage = image
+        }
     }
 }
 

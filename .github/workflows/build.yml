@@ -13,6 +13,8 @@ jobs:
   build-dmg:
     name: Build DMG (macOS)
     runs-on: macos-14   # Apple Silicon runner (M1), ships with Swift 5.9+
+    permissions:
+      contents: write   # Required to create/update GH Releases
 
     steps:
       # ── 1. Checkout ─────────────────────────────────────────────
@@ -39,6 +41,17 @@ jobs:
           # Binary
           cp ".build/arm64-apple-macosx/release/${APP_NAME}" \
              "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+          
+          # Resources (AppIcon.png)
+          # SwiftPM builds with resources into a .bundle directory
+          # We copy the files from that bundle into our app bundle's Resources
+          RESOURCE_BUNDLE=".build/arm64-apple-macosx/release/${APP_NAME}_${APP_NAME}.bundle"
+          if [ -d "$RESOURCE_BUNDLE" ]; then
+            cp -r "$RESOURCE_BUNDLE/"* "${APP_BUNDLE}/Contents/Resources/"
+          else
+            # Fallback if bundle name is different or not found
+            cp Sources/FloatingTaskManager/AppIcon.png "${APP_BUNDLE}/Contents/Resources/"
+          fi
 
           # Info.plist (at bundle root Contents/)
           cp Info.plist "${APP_BUNDLE}/Contents/Info.plist"

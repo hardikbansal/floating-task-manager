@@ -10,7 +10,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "FloatingTaskManager",
-            path: "Sources/FloatingTaskManager"
+            path: "Sources/FloatingTaskManager",
+            resources: [.process("AppIcon.png")]
         )
     ]
 )
