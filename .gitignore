@@ -1,0 +1,43 @@
+# ── Swift Package Manager ───────────────────────────────────────
+.build/
+.swiftpm/
+*.resolved
+
+# ── Xcode (if ever opened) ──────────────────────────────────────
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+*.moved-aside
+
+# ── macOS ────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Build artifacts ──────────────────────────────────────────────
+*.o
+*.a
+*.app
+*.dmg
+*.pkg
+*.ipa
+dist/
+build/
+
+# ── Editor / IDE ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Secrets / env ────────────────────────────────────────────────
+.env
+*.p12
+*.mobileprovision
+ExportOptions.plist

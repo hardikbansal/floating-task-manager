@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>FloatingTaskManager</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.hardikbansal.FloatingTaskManager</string>
+
+    <key>CFBundleName</key>
+    <string>Floating Task Manager</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Floating Task Manager</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleSignature</key>
+    <string>????</string>
+
+    <!-- Minimum macOS version (matches Package.swift) -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- Run as a UI app (required for SwiftUI / NSApplication) -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- No dock icon – app is purely floating -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- App category for Finder / Spotlight -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+
+    <!-- High-resolution display support -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Hardened runtime (required for notarisation) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <false/>
+</dict>
+</plist>

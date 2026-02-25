@@ -1,0 +1,97 @@
+import Foundation
+import Combine
+import SwiftUI
+
+// MARK: - List Color
+
+enum ListColor: String, Codable, CaseIterable {
+    case blue, purple, pink, orange, green, yellow, gray
+
+    var swiftUIColor: Color {
+        switch self {
+        case .blue:   return Color(hue: 0.60, saturation: 0.75, brightness: 0.85)
+        case .purple: return Color(hue: 0.75, saturation: 0.65, brightness: 0.80)
+        case .pink:   return Color(hue: 0.92, saturation: 0.60, brightness: 0.90)
+        case .orange: return Color(hue: 0.08, saturation: 0.80, brightness: 0.90)
+        case .green:  return Color(hue: 0.38, saturation: 0.65, brightness: 0.72)
+        case .yellow: return Color(hue: 0.14, saturation: 0.75, brightness: 0.90)
+        case .gray:   return Color(hue: 0.0,  saturation: 0.0,  brightness: 0.60)
+        }
+    }
+
+    static func from(color: Color) -> ListColor {
+        // Simple hue-based mapping
+        let nsColor = NSColor(color).usingColorSpace(.deviceRGB) ?? .blue
+        let hue = nsColor.hueComponent
+        switch hue {
+        case 0.55...0.70: return .blue
+        case 0.70...0.85: return .purple
+        case 0.85...1.0, 0.0..<0.05: return .pink
+        case 0.05...0.12: return .orange
+        case 0.30...0.50: return .green
+        case 0.12...0.20: return .yellow
+        default:          return .gray
+        }
+    }
+}
+
+// MARK: - Task Item
+
+struct TaskItem: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var content: String
+    var isCompleted: Bool = false
+    var isBold: Bool = false
+    var isItalic: Bool = false
+    var isStrikethrough: Bool = false
+}
+
+// MARK: - Task List
+
+class TaskList: Identifiable, Codable, Equatable, ObservableObject {
+    var id = UUID()
+    @Published var title: String
+    @Published var items: [TaskItem] = []
+    @Published var position: CGPoint = .zero
+    @Published var size: CGSize = CGSize(width: 300, height: 400)
+    @Published var color: ListColor = .blue
+
+    init(id: UUID = UUID(), title: String, items: [TaskItem] = [],
+         position: CGPoint = .zero, size: CGSize = CGSize(width: 300, height: 400),
+         color: ListColor = .blue) {
+        self.id = id
+        self.title = title
+        self.items = items
+        self.position = position
+        self.size = size
+        self.color = color
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, items, position, size, color
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id       = try container.decode(UUID.self,      forKey: .id)
+        title    = try container.decode(String.self,    forKey: .title)
+        items    = try container.decode([TaskItem].self, forKey: .items)
+        position = try container.decode(CGPoint.self,   forKey: .position)
+        size     = try container.decode(CGSize.self,    forKey: .size)
+        color    = (try? container.decode(ListColor.self, forKey: .color)) ?? .blue
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id,       forKey: .id)
+        try container.encode(title,    forKey: .title)
+        try container.encode(items,    forKey: .items)
+        try container.encode(position, forKey: .position)
+        try container.encode(size,     forKey: .size)
+        try container.encode(color,    forKey: .color)
+    }
+
+    static func == (lhs: TaskList, rhs: TaskList) -> Bool {
+        lhs.id == rhs.id
+    }
+}

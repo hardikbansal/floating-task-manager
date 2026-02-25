@@ -1,0 +1,118 @@
+name: Build & Package DMG
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"           # e.g. v1.0.0 — also triggers a GitHub Release
+  pull_request:
+    branches: [main]
+  workflow_dispatch:   # allow manual run from GitHub UI
+
+jobs:
+  build-dmg:
+    name: Build DMG (macOS)
+    runs-on: macos-14   # Apple Silicon runner (M1), ships with Swift 5.9+
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Print Swift version for debugging ────────────────────
+      - name: Swift version
+        run: swift --version
+
+      # ── 3. Build release binary ─────────────────────────────────
+      - name: Build (release)
+        run: swift build -c release --arch arm64
+
+      # ── 4. Assemble .app bundle ─────────────────────────────────
+      - name: Assemble .app bundle
+        run: |
+          APP_NAME="FloatingTaskManager"
+          APP_BUNDLE="dist/${APP_NAME}.app"
+
+          mkdir -p "${APP_BUNDLE}/Contents/MacOS"
+          mkdir -p "${APP_BUNDLE}/Contents/Resources"
+
+          # Binary
+          cp ".build/arm64-apple-macosx/release/${APP_NAME}" \
+             "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+
+          # Info.plist (at bundle root Contents/)
+          cp Info.plist "${APP_BUNDLE}/Contents/Info.plist"
+
+          # Stamp version from tag if running on a tag push
+          VERSION="${GITHUB_REF_NAME:-1.0.0}"
+          VERSION="${VERSION#v}"     # strip leading 'v'
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" \
+            "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true
+
+          echo "✅ .app bundle assembled at ${APP_BUNDLE}"
+          find "${APP_BUNDLE}" -type f
+
+      # ── 5. Ad-hoc code sign (works without Apple certificates) ──
+      - name: Ad-hoc code sign
+        run: |
+          APP_BUNDLE="dist/FloatingTaskManager.app"
+          codesign --force --deep --sign - \
+                   --options runtime \
+                   --entitlements /dev/null \
+                   "${APP_BUNDLE}"
+          echo "✅ Ad-hoc signed"
+          codesign --verify --verbose "${APP_BUNDLE}"
+
+      # ── 6. Create DMG with hdiutil ───────────────────────────────
+      - name: Create DMG
+        run: |
+          APP_BUNDLE="dist/FloatingTaskManager.app"
+          DMG_PATH="dist/FloatingTaskManager.dmg"
+          TMP_DMG="dist/tmp.dmg"
+          VOLUME_NAME="Floating Task Manager"
+
+          # Create a writable image
+          hdiutil create -srcfolder "${APP_BUNDLE}" \
+                         -volname "${VOLUME_NAME}" \
+                         -fs HFS+ \
+                         -fsargs "-c c=64,a=16,b=16" \
+                         -format UDRW \
+                         -size 50m \
+                         "${TMP_DMG}"
+
+          # Mount it
+          MOUNT_DIR=$(hdiutil attach -readwrite -noverify -noautoopen \
+                       "${TMP_DMG}" | grep -E '^/dev/' | head -1 | awk '{print $NF}')
+
+          # Add Applications symlink for drag-install
+          ln -s /Applications "/Volumes/${VOLUME_NAME}/Applications"
+
+          # Eject
+          hdiutil detach "/Volumes/${VOLUME_NAME}"
+
+          # Convert to compressed read-only DMG
+          hdiutil convert "${TMP_DMG}" \
+                          -format UDZO \
+                          -imagekey zlib-level=9 \
+                          -o "${DMG_PATH}"
+
+          rm -f "${TMP_DMG}"
+
+          echo "✅ DMG created: ${DMG_PATH}"
+          ls -lh "${DMG_PATH}"
+
+      # ── 7. Upload DMG as workflow artifact ──────────────────────
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FloatingTaskManager-dmg
+          path: dist/FloatingTaskManager.dmg
+          retention-days: 30
+
+      # ── 8. Attach DMG to GitHub Release (tag pushes only) ───────
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/FloatingTaskManager.dmg
+          generate_release_notes: true
