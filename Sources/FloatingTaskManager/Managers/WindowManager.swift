@@ -20,6 +20,11 @@ class WindowManager: NSObject, ObservableObject {
         openWindowIDs.contains(listID)
     }
 
+    /// Check if a window is managed by this manager (either a list window or the floating button)
+    func isManaged(_ window: NSWindow) -> Bool {
+        windows.values.contains(window)
+    }
+
     // MARK: - Floating Button
 
     func showFloatingButton() {

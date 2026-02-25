@@ -23,10 +23,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupSystemTray()
         setupGlobalShortcut()
 
-        // Hide the default WindowGroup window
-        DispatchQueue.main.async {
+        // Hide the default WindowGroup window(s) that SwiftUI creates automatically.
+        // We only want windows managed by WindowManager to be visible.
+        // Status bar items create tiny windows (usually ~30x30), so we ignore those.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             for window in NSApp.windows {
-                if window.title == "Floating Task Manager" {
+                let isManaged = WindowManager.shared.isManaged(window)
+                if !isManaged && window.frame.width > 100 { 
+                    print("🚪 Closing unmanaged ghost window: '\(window.title)' frame: \(window.frame)")
                     window.close()
                 }
             }
@@ -76,6 +80,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Show All Lists", action: #selector(showAllLists), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "Hide All Windows", action: #selector(hideAllWindows), keyEquivalent: "h"))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         
         statusItem?.menu = menu
@@ -91,6 +97,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for list in store.lists {
             WindowManager.shared.closeListWindow(for: list.id)
         }
+    }
+
+    @objc private func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func requestNotificationPermission() {
@@ -121,7 +132,7 @@ struct FloatingTaskManagerApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            SettingsView()
         }
     }
 }
