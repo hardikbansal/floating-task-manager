@@ -17,7 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         requestNotificationPermission()
         setupAppIcon()
 
-        for list in store.lists {
+        for list in store.lists where list.isVisible {
             WindowManager.shared.createListWindow(for: list, store: store)
         }
 

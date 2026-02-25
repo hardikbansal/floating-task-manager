@@ -44,6 +44,7 @@ class WindowManager: NSObject, ObservableObject {
         window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
         window.isMovableByWindowBackground = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.isRestorable = false
 
         window.contentView = NSHostingView(rootView:
             FloatingButtonView()
@@ -73,6 +74,10 @@ class WindowManager: NSObject, ObservableObject {
             existing.makeKeyAndOrderFront(nil)
             existing.orderFrontRegardless()
             openWindowIDs.insert(list.id)
+            if !list.isVisible {
+                list.isVisible = true
+                store.save()
+            }
             return
         }
         createListWindow(for: list, store: store)
@@ -93,6 +98,8 @@ class WindowManager: NSObject, ObservableObject {
         window.backgroundColor = .clear
         window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.isRestorable = false
+        window.isReleasedWhenClosed = false
 
         window.contentView = NSHostingView(rootView:
             TaskListView(list: list)
@@ -106,6 +113,11 @@ class WindowManager: NSObject, ObservableObject {
 
         windows[list.id] = window
         openWindowIDs.insert(list.id)
+        
+        if !list.isVisible {
+            list.isVisible = true
+            store.save()
+        }
 
         // Persist position/size as user moves/resizes
         NotificationCenter.default.addObserver(
@@ -123,6 +135,13 @@ class WindowManager: NSObject, ObservableObject {
             forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
                 self?.windows.removeValue(forKey: list.id)
                 self?.openWindowIDs.remove(list.id)
+                
+                // If the user closed it, persist that it's hidden
+                if list.isVisible {
+                    list.isVisible = false
+                    store.save()
+                    print("💾 Persisted isVisible=false for list: \(list.title)")
+                }
         }
     }
 

@@ -91,10 +91,11 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
     @Published var size: CGSize = CGSize(width: 300, height: 400)
     @Published var color: ListColor = .blue
     @Published var sortDescending: Bool = true
+    @Published var isVisible: Bool = true
 
     init(id: UUID = UUID(), title: String, items: [TaskItem] = [],
          position: CGPoint = .zero, size: CGSize = CGSize(width: 300, height: 400),
-         color: ListColor = .blue) {
+         color: ListColor = .blue, isVisible: Bool = true) {
         self.id = id
         self.title = title
         self.items = items
@@ -102,10 +103,11 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         self.size = size
         self.color = color
         self.sortDescending = true
+        self.isVisible = isVisible
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, items, position, size, color, sortDescending
+        case id, title, items, position, size, color, sortDescending, isVisible
     }
 
     required init(from decoder: Decoder) throws {
@@ -117,6 +119,7 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         size     = (try? container.decode(CGSize.self,    forKey: .size)) ?? CGSize(width: 300, height: 400)
         color    = (try? container.decode(ListColor.self, forKey: .color)) ?? .blue
         sortDescending = (try? container.decode(Bool.self, forKey: .sortDescending)) ?? true
+        isVisible = (try? container.decode(Bool.self, forKey: .isVisible)) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -128,6 +131,7 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         try container.encode(size,     forKey: .size)
         try container.encode(color,    forKey: .color)
         try container.encode(sortDescending, forKey: .sortDescending)
+        try container.encode(isVisible, forKey: .isVisible)
     }
 
     func sortItemsByPriority() {
