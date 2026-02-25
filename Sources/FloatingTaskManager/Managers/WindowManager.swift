@@ -33,7 +33,7 @@ class WindowManager: NSObject, ObservableObject {
         guard let store = taskStore else { return }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 64, height: 64),
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 120), // Larger canvas to avoid shadow clipping
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -41,7 +41,8 @@ class WindowManager: NSObject, ObservableObject {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.level = .floating
-        window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
+        window.hasShadow = false // SwiftUI handles this now
+        window.ignoresMouseEvents = false
         window.isMovableByWindowBackground = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
         window.isRestorable = false
@@ -87,12 +88,10 @@ class WindowManager: NSObject, ObservableObject {
         let origin = list.position == .zero ? randomPosition() : list.position
         let window = NSWindow(
             contentRect: NSRect(origin: origin, size: list.size),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
+            styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
         window.level = .floating
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
@@ -148,7 +147,8 @@ class WindowManager: NSObject, ObservableObject {
     /// Refresh appearance of all managed windows
     func updateWindowsAppearance() {
         let enableShadows = UserDefaults.standard.bool(forKey: "enableShadows")
-        for window in windows.values {
+        for (id, window) in windows {
+            if id == floatingButtonID { continue }
             window.hasShadow = enableShadows
             window.invalidateShadow()
         }

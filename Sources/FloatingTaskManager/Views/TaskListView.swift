@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 // MARK: - Task List View
 
@@ -11,113 +12,129 @@ struct TaskListView: View {
     @AppStorage("windowOpacity") var windowOpacity: Double = 0.95
     @AppStorage("enableShadows") var enableShadows: Bool = true
     @State private var newItemContent: String = ""
-    @State private var isHoveringHeader = false
     @State private var showColorPicker = false
 
     var body: some View {
         VStack(spacing: 0) {
 
             // ── Header ──────────────────────────────────────────────
-            HStack(spacing: 8) {
+            HStack(spacing: 12) {
                 // Compact color swatch button
                 Button(action: { showColorPicker.toggle() }) {
                     Circle()
                         .fill(list.color.swiftUIColor)
-                        .frame(width: 14, height: 14)
-                        .overlay(Circle().stroke(Color.white.opacity(0.4), lineWidth: 1))
-                        .shadow(color: list.color.swiftUIColor.opacity(0.5), radius: 3)
+                        .frame(width: 12, height: 12)
+                        .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1))
+                        .shadow(color: list.color.swiftUIColor.opacity(0.3), radius: 4)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(PremiumButtonStyle())
                 .popover(isPresented: $showColorPicker, arrowEdge: .bottom) {
                     ColorSwatchPicker(selected: $list.color, onPick: { store.save() })
                 }
 
                 TextField("List Title", text: $list.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .textFieldStyle(PlainTextFieldStyle())
                     .onSubmit { store.save() }
 
                 Spacer()
 
-                // Sort button (Always Visible)
-                Button(action: { 
-                    list.sortDescending.toggle()
-                    list.sortItemsByPriority()
-                    store.save() 
-                }) {
-                    Image(systemName: list.sortDescending ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(list.color.swiftUIColor)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help(list.sortDescending ? "Sort: High to Low" : "Sort: Low to High")
-                .padding(.trailing, 4)
+                HStack(spacing: 8) {
+                    // Sort button
+                    Button(action: { 
+                        withAnimation(PremiumTheme.spring()) {
+                            list.sortDescending.toggle()
+                            list.sortItemsByPriority()
+                            store.save() 
+                        }
+                    }) {
+                        Image(systemName: list.sortDescending ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(list.color.swiftUIColor)
+                    }
+                    .buttonStyle(PremiumButtonStyle())
+                    .help(list.sortDescending ? "Sort: High to Low" : "Sort: Low to High")
 
-                // Close button (Always Visible)
-                Button(action: { windowManager.closeListWindow(for: list.id) }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15))
-                        .foregroundColor(.secondary)
+                    // Close button
+                    Button(action: { windowManager.closeListWindow(for: list.id) }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PremiumButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(list.color.swiftUIColor.opacity(0.12))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                MeshGradientView(baseColor: list.color.swiftUIColor)
+                    .opacity(0.15)
+                    .overlay(VisualEffectView(material: .headerView, blendingMode: .withinWindow).opacity(0.5))
+            )
 
-            Divider().opacity(0.25)
+            Divider().opacity(0.1)
 
-            // ── Items (ScrollView avoids AppKit row-height errors) ──
-            ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(spacing: 1) {
+            // ── Items ──
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 4) {
                     ForEach($list.items) { $item in
                         TaskItemRow(item: $item,
-                                    onDelete: { list.items.removeAll { $0.id == item.id }; store.save() },
+                                    onDelete: { 
+                                        withAnimation(.spring()) {
+                                            list.items.removeAll { $0.id == item.id }
+                                            store.save()
+                                        }
+                                    },
                                     onChange:  { store.save() })
                     }
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 4)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 8)
             }
 
-            Divider().opacity(0.2)
+            Divider().opacity(0.1)
 
             // ── Add task row ────────────────────────────────────────
-            HStack(spacing: 8) {
-                Image(systemName: "plus.circle")
-                    .foregroundColor(list.color.swiftUIColor.opacity(0.8))
-                    .font(.system(size: 13))
-                TextField("Add task...", text: $newItemContent)
+            HStack(spacing: 12) {
+                Image(systemName: "plus")
+                    .foregroundColor(list.color.swiftUIColor)
+                    .font(.system(size: 14, weight: .bold))
+                
+                TextField("Add a task...", text: $newItemContent)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: baseFontSize))
-                    .onSubmit { addItem() }
+                    .font(.system(size: baseFontSize, weight: .medium, design: .rounded))
+                    .onSubmit { 
+                        withAnimation(.spring()) {
+                            addItem()
+                        }
+                    }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(Color.white.opacity(0.02))
 
-            Divider().opacity(0.2)
+            Divider().opacity(0.1)
 
             // ── Footer ──────────────────────────────────────────────
             HStack {
                 let done = list.items.filter(\.isCompleted).count
                 let total = list.items.count
-                Text(total == 0 ? "No tasks" : "\(done) / \(total) done")
-                    .font(.system(size: 10))
+                Text(total == 0 ? "No tasks" : "\(done) of \(total) completed")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("⌘⇧N  new list")
-                    .font(.system(size: 10))
+                Text("⌘⇧N  New List")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundColor(.secondary.opacity(0.4))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .frame(minWidth: 270, minHeight: 300)
-        .background(
-            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                .opacity(windowOpacity)
-                .ignoresSafeArea()
-        )
+        .frame(minWidth: 280, minHeight: 320)
+        .background(GlassBackground(cornerRadius: 16))
+        .containerShape(RoundedRectangle(cornerRadius: 16))
+        .opacity(windowOpacity)
         .onChange(of: enableShadows) { newValue in
             windowManager.updateWindowsAppearance()
         }
@@ -172,8 +189,6 @@ struct ColorSwatchPicker: View {
     }
 }
 
-import UserNotifications
-
 struct TaskItemRow: View {
     @Binding var item: TaskItem
     @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
@@ -192,20 +207,15 @@ struct TaskItemRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
             // Checkbox
-            Button(action: { 
-                item.isCompleted.toggle()
-                if item.isCompleted {
-                    removeReminder()
+            ModernCheckbox(isChecked: $item.isCompleted, color: .blue)
+                .onChange(of: item.isCompleted) { newValue in
+                    if newValue {
+                        removeReminder()
+                    }
+                    onChange()
                 }
-                onChange() 
-            }) {
-                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(item.isCompleted ? .blue : .secondary)
-                    .font(.system(size: baseFontSize + 2))
-            }
-            .buttonStyle(PlainButtonStyle())
 
             // Reminder Indicator
             if let reminder = item.reminderDate, !item.isCompleted {
@@ -218,30 +228,37 @@ struct TaskItemRow: View {
             // Text field
             TextField("Task...", text: $item.content, onCommit: onChange)
                 .textFieldStyle(PlainTextFieldStyle())
-                .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .regular))
+                .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: .rounded))
                 .italic(item.isItalic)
                 .strikethrough(item.isCompleted || item.isStrikethrough, color: .secondary)
-                .foregroundColor(item.isCompleted ? .secondary : .primary)
+                .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
 
             // Priority Tag
             if item.priority != .none {
                 Text(item.priority.title.uppercased())
-                    .font(.system(size: 8, weight: .bold))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(item.priority.color.opacity(0.15))
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(item.priority.color.opacity(0.12))
+                            .overlay(Capsule().stroke(item.priority.color.opacity(0.2), lineWidth: 0.5))
+                    )
                     .foregroundColor(item.priority.color)
-                    .cornerRadius(4)
             }
 
-            // Format toolbar — single onHover on row keeps this flicker-free
+            // Format toolbar
             if rowHovered {
-                HStack(spacing: 2) {
-                    FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           onChange() }
-                    FormatToggle(icon: "italic",         active: item.isItalic)          { item.isItalic.toggle();         onChange() }
-                    FormatToggle(icon: "strikethrough",  active: item.isStrikethrough)   { item.isStrikethrough.toggle();  onChange() }
+                HStack(spacing: 4) {
+                    HStack(spacing: 2) {
+                        FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           onChange() }
+                        FormatToggle(icon: "italic",         active: item.isItalic)          { item.isItalic.toggle();         onChange() }
+                        FormatToggle(icon: "strikethrough",  active: item.isStrikethrough)   { item.isStrikethrough.toggle();  onChange() }
+                    }
+                    .padding(2)
+                    .background(Capsule().fill(Color.primary.opacity(0.05)))
                     
-                    Divider().frame(height: 12).padding(.horizontal, 1)
+                    Divider().frame(height: 12)
 
                     // Reminder Button
                     Button(action: { 
@@ -249,16 +266,16 @@ struct TaskItemRow: View {
                         showReminderPicker.toggle() 
                     }) {
                         Image(systemName: item.reminderDate == nil ? "bell" : "bell.fill")
-                            .font(.system(size: 10))
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(item.reminderDate == nil ? .secondary : .blue)
-                            .frame(width: 20, height: 20)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(item.reminderDate != nil ? Color.blue.opacity(0.1) : Color.clear))
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(item.reminderDate != nil ? Color.blue.opacity(0.1) : Color.clear))
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(PremiumButtonStyle())
                     .popover(isPresented: $showReminderPicker) {
-                        VStack(spacing: 8) {
+                        VStack(spacing: 12) {
                             Text("Set Reminder")
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
                             
                             DatePicker("", selection: $tempReminderDate)
                                 .datePickerStyle(GraphicalDatePickerStyle())
@@ -285,10 +302,8 @@ struct TaskItemRow: View {
                                 .controlSize(.small)
                             }
                         }
-                        .padding(12)
+                        .padding(16)
                     }
-                    
-                    Divider().frame(height: 12).padding(.horizontal, 1)
                     
                     // Priority Picker
                     Menu {
@@ -306,29 +321,35 @@ struct TaskItemRow: View {
                         Image(systemName: "flag.fill")
                             .font(.system(size: 10))
                             .foregroundColor(item.priority == .none ? .secondary : item.priority.color)
-                            .frame(width: 20, height: 20)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(item.priority != .none ? item.priority.color.opacity(0.1) : Color.clear))
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(item.priority != .none ? item.priority.color.opacity(0.1) : Color.clear))
                     }
                     .fixedSize()
 
-                    Divider().frame(height: 12).padding(.horizontal, 1)
                     Button(action: onDelete) {
                         Image(systemName: "trash")
                             .font(.system(size: 10))
                             .foregroundColor(.red.opacity(0.8))
+                            .frame(width: 24, height: 24)
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(PremiumButtonStyle())
                 }
-                .transition(.opacity.animation(.easeInOut(duration: 0.1)))
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(rowHovered ? Color.primary.opacity(0.06) : Color.clear)
+            RoundedRectangle(cornerRadius: 10)
+                .fill(rowHovered ? Color.primary.opacity(0.04) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.primary.opacity(rowHovered ? 0.05 : 0), lineWidth: 0.5)
+                )
         )
-        .onHover { rowHovered = $0 }   // single hover — no flicker
+        .contentShape(Rectangle())
+        .onHover { rowHovered = $0 }
+        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: rowHovered)
     }
 
     private func setReminder(at date: Date) {
@@ -376,25 +397,5 @@ struct FormatToggle: View {
                     .fill(active ? Color.blue.opacity(0.15) : Color.clear))
         }
         .buttonStyle(PlainButtonStyle())
-    }
-}
-
-// MARK: - Visual Effect
-
-struct VisualEffectView: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-    let blendingMode: NSVisualEffectView.BlendingMode
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
     }
 }

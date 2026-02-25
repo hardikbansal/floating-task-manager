@@ -10,24 +10,62 @@ struct FloatingButtonView: View {
     var body: some View {
         Button(action: { showPanel.toggle() }) {
             ZStack {
+                // Frosty Backdrop Blur
+                Circle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(width: 58, height: 58)
+                    .blur(radius: 2)
+                
+                // Main Pristine Orb (Frosted White)
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color(hue: 0.6, saturation: 0.8, brightness: 0.9),
-                                     Color(hue: 0.55, saturation: 0.9, brightness: 0.75)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
+                            colors: [.white, Color(white: 0.98)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
                     )
                     .frame(width: 56, height: 56)
-                    .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 4)
+                    .overlay(
+                        // Refractive Frosty Edge
+                        Circle()
+                            .stroke(Color.white.opacity(0.8), lineWidth: 0.5)
+                    )
+                
+                
+                // Inner "Brilliance" Glow
+                Circle()
+                    .fill(RadialGradient(colors: [.white, .clear], center: .center, startRadius: 0, endRadius: 28))
+                    .opacity(0.6)
+                    .frame(width: 50, height: 50)
+                
+                // Top Glass Shell Refraction
+                Ellipse()
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.9), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 44, height: 26)
+                    .offset(y: -14)
+                    .blur(radius: 0.8)
 
-                Image(systemName: showPanel ? "xmark" : "list.bullet.rectangle")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(.white)
-                    .animation(.spring(response: 0.3), value: showPanel)
+                // Vibrant Plus Icon
+                Image(systemName: showPanel ? "xmark" : "plus")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundColor(.blue)
+                    .shadow(color: .blue.opacity(0.3), radius: 4)
+                    .rotationEffect(.degrees(showPanel ? 90 : 0))
             }
-            .scaleEffect(isHovered ? 1.08 : 1.0)
-            .animation(.spring(response: 0.25), value: isHovered)
+            .frame(width: 120, height: 120)
+            .background(Color.clear)
+            .contentShape(Circle())
+            .shadow(color: .black.opacity(0.12), radius: 15, x: 0, y: 10)
+            .scaleEffect(isHovered ? 1.05 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: showPanel)
         }
         .buttonStyle(PlainButtonStyle())
         .onHover { isHovered = $0 }
@@ -51,124 +89,118 @@ struct ListsPanel: View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Text("My Lists")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.primary)
+                Text("Command Center")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary.opacity(0.8))
                 Spacer()
                 Button(action: createNewList) {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 18))
+                        .font(.system(size: 20))
+                        .symbolRenderingMode(.hierarchical)
                         .foregroundColor(.blue)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(PremiumButtonStyle())
                 .help("New List (⌘⇧N)")
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
 
-            Divider()
+            Divider().opacity(0.1)
 
             if store.lists.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 28))
-                        .foregroundColor(.secondary.opacity(0.5))
-                    Text("No lists yet")
-                        .font(.system(size: 12))
+                VStack(spacing: 12) {
+                    Image(systemName: "square.stack.3d.up.slash")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary.opacity(0.4))
+                    Text("No Active Lists")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundColor(.secondary)
-                    Button("Create New List", action: createNewList)
+                    Button("Initialize First List", action: createNewList)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 28)
+                .padding(.vertical, 40)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 6) {
                         ForEach(store.lists) { list in
                             ListPanelRow(list: list)
                                 .environmentObject(store)
                                 .environmentObject(windowManager)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 8)
                 }
-                .frame(maxHeight: 320)
+                .frame(maxHeight: 340)
             }
 
-            Divider()
+            Divider().opacity(0.1)
 
-            // Settings Section
-            VStack(alignment: .leading, spacing: 8) {
+            // Settings Widget Section
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Image(systemName: "textformat.size")
-                        .font(.system(size: 11))
-                    Text("Text Size: \(Int(baseFontSize))pt")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 11, weight: .bold))
+                    Text("System Font Size")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                     Spacer()
+                    Text("\(Int(baseFontSize))pt")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.blue)
                 }
                 .foregroundColor(.secondary)
 
-                Slider(value: Binding(
-                    get: { baseFontSize },
-                    set: { baseFontSize = $0 }
-                ), in: 10...24, step: 1)
-                .controlSize(.small)
+                Slider(value: $baseFontSize, in: 10...24, step: 1)
+                    .controlSize(.mini)
+                    .accentColor(.blue)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Color.primary.opacity(0.03))
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.primary.opacity(0.04))
+                    .padding(8)
+            )
 
-            Divider()
+            Divider().opacity(0.1)
 
-            // Menu Actions
-            VStack(spacing: 0) {
-                MenuActionButton(title: "Show All Lists", icon: "macwindow.on.rectangle") {
+            // Grid Actions
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                QuickActionButton(title: "Show All", icon: "eye.fill") {
                     for list in store.lists { windowManager.openOrFocusListWindow(for: list, store: store) }
                     showPanel = false
                 }
-                MenuActionButton(title: "Hide All Windows", icon: "window.casement") {
+                QuickActionButton(title: "Hide All", icon: "eye.slash.fill") {
                     for list in store.lists { windowManager.closeListWindow(for: list.id) }
                     showPanel = false
                 }
-                
-                let screens = NSScreen.screens
-                if screens.count > 1 {
-                    Divider().padding(.horizontal, 10)
-                    ForEach(0..<screens.count, id: \.self) { index in
-                        MenuActionButton(title: "Move All to Screen \(index + 1)", icon: "display") {
-                            windowManager.moveAllWindows(to: screens[index])
-                            showPanel = false
-                        }
-                    }
-                }
-                
-                Divider().padding(.horizontal, 10)
-                
-                MenuActionButton(title: "Settings...", icon: "gearshape") {
+                QuickActionButton(title: "Settings", icon: "gearshape.fill") {
                     windowManager.showSettingsWindowManual()
                     showPanel = false
                 }
-                MenuActionButton(title: "Quit", icon: "power", color: .red) {
+                QuickActionButton(title: "Quit", icon: "power", color: .red) {
                     NSApp.terminate(nil)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(12)
         }
-        .frame(width: 260)
-        .background(VisualEffectView(material: .menu, blendingMode: .behindWindow))
+        .frame(width: 280)
+        .background(GlassBackground(cornerRadius: 20))
     }
     
     private func createNewList() {
-        store.createNewList()
-        if let last = store.lists.last {
-            windowManager.openOrFocusListWindow(for: last, store: store)
+        withAnimation(.spring()) {
+            store.createNewList()
+            if let last = store.lists.last {
+                windowManager.openOrFocusListWindow(for: last, store: store)
+            }
+            showPanel = false
         }
-        showPanel = false
     }
 }
 
-struct MenuActionButton: View {
+struct QuickActionButton: View {
     let title: String
     let icon: String
     var color: Color = .primary
@@ -177,21 +209,24 @@ struct MenuActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            VStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 11))
-                    .frame(width: 16)
+                    .font(.system(size: 14, weight: .bold))
                 Text(title)
-                    .font(.system(size: 12))
-                Spacer()
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(color.opacity(isHovered ? 0.15 : 0.06))
+            )
             .foregroundColor(color.opacity(isHovered ? 1.0 : 0.8))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
         }
         .buttonStyle(PlainButtonStyle())
         .onHover { isHovered = $0 }
+        .scaleEffect(isHovered ? 1.02 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
     }
 }
 
@@ -206,62 +241,65 @@ struct ListPanelRow: View {
     var isOpen: Bool { windowManager.isWindowOpen(for: list.id) }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             // Colored dot
             Circle()
                 .fill(list.color.swiftUIColor)
-                .frame(width: 10, height: 10)
+                .frame(width: 8, height: 8)
+                .shadow(color: list.color.swiftUIColor.opacity(0.4), radius: 3)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(list.title.isEmpty ? "Untitled" : list.title)
-                    .font(.system(size: 13, weight: .medium))
+                Text(list.title.isEmpty ? "Untitled List" : list.title)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .lineLimit(1)
-                Text("\(list.items.count) item\(list.items.count == 1 ? "" : "s")")
-                    .font(.system(size: 10))
+                Text("\(list.items.count) items")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundColor(.secondary)
             }
 
             Spacer()
 
-            // Show/hide window toggle
-            Button(action: {
-                if isOpen {
-                    windowManager.closeListWindow(for: list.id)
-                } else {
-                    windowManager.openOrFocusListWindow(for: list, store: store)
+            // Actions
+            HStack(spacing: 8) {
+                Button(action: {
+                    withAnimation(.spring()) {
+                        if isOpen {
+                            windowManager.closeListWindow(for: list.id)
+                        } else {
+                            windowManager.openOrFocusListWindow(for: list, store: store)
+                        }
+                    }
+                }) {
+                    Image(systemName: isOpen ? "eye.fill" : "eye.slash")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(isOpen ? .blue : .secondary.opacity(0.4))
                 }
-            }) {
-                Image(systemName: isOpen ? "eye.fill" : "eye.slash")
-                    .font(.system(size: 12))
-                    .foregroundColor(isOpen ? .blue : .secondary.opacity(0.6))
-            }
-            .buttonStyle(PlainButtonStyle())
-            .help(isOpen ? "Hide window" : "Show window")
+                .buttonStyle(PremiumButtonStyle())
 
-            // Delete list
-            Button(action: {
-                windowManager.closeListWindow(for: list.id)
-                store.deleteList(list)
-            }) {
-                Image(systemName: "trash")
-                    .font(.system(size: 12))
-                    .foregroundColor(.red.opacity(0.75))
+                Button(action: {
+                    withAnimation(.spring()) {
+                        windowManager.closeListWindow(for: list.id)
+                        store.deleteList(list)
+                    }
+                }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundColor(.red.opacity(0.6))
+                }
+                .buttonStyle(PremiumButtonStyle())
             }
-            .buttonStyle(PlainButtonStyle())
-            .help("Delete list")
+            .opacity(isHovered ? 1 : 0.4)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(isHovered ? Color.primary.opacity(0.07) : Color.clear)
-                .padding(.horizontal, 4)
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.primary.opacity(isHovered ? 0.05 : 0))
         )
         .contentShape(Rectangle())
         .onTapGesture {
             windowManager.openOrFocusListWindow(for: list, store: store)
         }
         .onHover { isHovered = $0 }
-        .animation(.easeInOut(duration: 0.12), value: isHovered)
     }
 }
