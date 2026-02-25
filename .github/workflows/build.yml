@@ -56,10 +56,10 @@ jobs:
       - name: Ad-hoc code sign
         run: |
           APP_BUNDLE="dist/FloatingTaskManager.app"
-          codesign --force --deep --sign - \
-                   --options runtime \
-                   --entitlements /dev/null \
-                   "${APP_BUNDLE}"
+          # --sign - means ad-hoc (no certificate required).
+          # --options runtime and --entitlements are omitted intentionally:
+          # they only apply when signing with a real Developer ID cert.
+          codesign --force --deep --sign - "${APP_BUNDLE}"
           echo "✅ Ad-hoc signed"
           codesign --verify --verbose "${APP_BUNDLE}"
 
