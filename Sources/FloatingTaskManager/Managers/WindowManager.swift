@@ -46,7 +46,12 @@ class WindowManager: NSObject, ObservableObject {
         #if os(macOS)
         guard let store = taskStore else { return }
 
-        let window = NSWindow(
+        class BorderlessFloatingButtonWindow: NSWindow {
+            override var canBecomeKey: Bool { true }
+            override var canBecomeMain: Bool { false }
+        }
+
+        let window = BorderlessFloatingButtonWindow(
             contentRect: NSRect(x: 0, y: 0, width: 120, height: 120), // Larger canvas to avoid shadow clipping
             styleMask: [.borderless],
             backing: .buffered,
@@ -67,9 +72,19 @@ class WindowManager: NSObject, ObservableObject {
                 .environmentObject(self)
         )
 
-        if let screen = NSScreen.main {
+        let targetScreen: NSScreen? = {
+            let mouseLocation = NSEvent.mouseLocation
+            if let underMouse = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) {
+                return underMouse
+            }
+            return NSScreen.main ?? NSScreen.screens.first
+        }()
+
+        if let screen = targetScreen {
             let f = screen.visibleFrame
-            window.setFrameOrigin(NSPoint(x: f.maxX - 80, y: f.minY + 20))
+            let x = max(f.minX + 16, f.maxX - window.frame.width - 16)
+            let y = f.minY + 16
+            window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 
         window.makeKeyAndOrderFront(nil)
@@ -260,7 +275,7 @@ class WindowManager: NSObject, ObservableObject {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 500),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -270,11 +285,13 @@ class WindowManager: NSObject, ObservableObject {
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.backgroundColor = .windowBackgroundColor
-        
+
+        let store = taskStore ?? TaskStore()
         window.contentView = NSHostingView(rootView:
             SettingsView()
+                .environmentObject(store)
                 .padding()
-                .frame(width: 480, height: 320)
+                .frame(width: 520, height: 500)
         )
 
         self.settingsWindow = window

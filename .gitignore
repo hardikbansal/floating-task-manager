@@ -7,8 +7,11 @@
 *.xcodeproj/
 *.xcworkspace/
 xcuserdata/
+**/*.xcodeproj/xcuserdata/
+**/*.xcworkspace/xcuserdata/
 *.xcscmblueprint
 *.xccheckout
+*.xcuserstate
 DerivedData/
 *.moved-aside
 
@@ -38,6 +41,18 @@ build/
 
 # ── Secrets / env ────────────────────────────────────────────────
 .env
+.env.*
 *.p12
 *.mobileprovision
 ExportOptions.plist
+.derived/
+GoogleService-Info.plist
+
+# ── Firebase local state/logs ────────────────────────────────────
+.firebase/
+firebase-debug.log
+firestore-debug.log
+database-debug.log
+pubsub-debug.log
+storage-debug.log
+ui-debug.log

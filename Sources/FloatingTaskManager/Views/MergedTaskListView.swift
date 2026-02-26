@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 struct MergedTaskListView: View {
     @EnvironmentObject var store: TaskStore
@@ -7,12 +8,16 @@ struct MergedTaskListView: View {
     @AppStorage("windowOpacity") var windowOpacity: Double = 0.95
 
     var body: some View {
+        #if os(iOS)
+        iosBody
+        #else
         VStack(spacing: 0) {
             // Header
             HStack {
                 Text("Merged Tasks")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                 Spacer()
+                #if os(macOS)
                 Button(action: { windowManager.closeListWindow(for: windowManager.MERGED_LIST_ID) }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
@@ -20,10 +25,13 @@ struct MergedTaskListView: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(PremiumButtonStyle())
+                #endif
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(VisualEffectView(material: .headerView, blendingMode: .withinWindow).opacity(0.5))
+            .background(
+                headerBackground
+            )
 
             Divider().opacity(0.1)
 
@@ -52,11 +60,94 @@ struct MergedTaskListView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 400)
         .background(GlassBackground(cornerRadius: 16))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .containerShape(RoundedRectangle(cornerRadius: 16))
         .opacity(windowOpacity)
+        #else
+        .background(Color(.systemBackground))
+        #endif
+        #endif
+    }
+
+    #if os(iOS)
+    private var iosBody: some View {
+        VStack(spacing: 0) {
+            // ── Header ──
+            HStack {
+                Text("Merged Tasks")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                Spacer()
+                EditButton()
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(headerBackground)
+
+            Divider().opacity(0.3)
+
+            // ── Task Rows ──
+            List {
+                ForEach(orderedTasks) { task in
+                    IOSMergedTaskRow(task: task)
+                        .environmentObject(store)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                toggleTaskCompletion(task)
+                            } label: {
+                                Label(task.isCompleted ? "Undo" : "Done", systemImage: task.isCompleted ? "arrow.uturn.backward" : "checkmark")
+                            }
+                            .tint(task.isCompleted ? .orange : .green)
+                        }
+                }
+                .onMove(perform: moveTasks)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+
+            Divider().opacity(0.3)
+
+            // ── Footer ──
+            HStack {
+                let allTasks = store.getAllTasks()
+                let done = allTasks.filter(\.isCompleted).count
+                let total = allTasks.count
+                Text("\(done) of \(total) completed across all lists")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+        }
+        .background(Color(uiColor: .systemBackground))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func toggleTaskCompletion(_ task: TaskItem) {
+        for i in 0..<store.lists.count {
+            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
+                store.lists[i].items[j].isCompleted.toggle()
+                store.save()
+                return
+            }
+        }
+    }
+    #endif
+
+    @ViewBuilder
+    private var headerBackground: some View {
+        #if os(macOS)
+        VisualEffectView(material: .headerView, blendingMode: .withinWindow).opacity(0.5)
+        #else
+        VisualEffectView(material: .systemThinMaterial).opacity(0.5)
+        #endif
     }
 
     private var orderedTasks: [TaskItem] {
@@ -157,3 +248,216 @@ struct MergedTaskRow: View {
         }
     }
 }
+
+// MARK: - iOS Merged Task Row
+
+#if os(iOS)
+struct IOSMergedTaskRow: View {
+    let task: TaskItem
+    @EnvironmentObject var store: TaskStore
+    @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
+
+    @State private var showReminderSheet = false
+    @State private var tempReminderDate = Date()
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Modern checkbox
+            ModernCheckbox(isChecked: Binding(
+                get: { task.isCompleted },
+                set: { _ in toggleTaskCompletion() }
+            ), color: listColor)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(task.content)
+                    .font(.system(size: baseFontSize, weight: task.isBold ? .bold : .medium, design: .rounded))
+                    .strikethrough(task.isCompleted || task.isStrikethrough)
+                    .italic(task.isItalic)
+                    .foregroundColor(task.isCompleted ? .secondary : .primary)
+                    .lineLimit(2)
+
+                HStack(spacing: 6) {
+                    // List Tag
+                    if let list = store.lists.first(where: { $0.items.contains(where: { $0.id == task.id }) }) {
+                        Text(list.title)
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundColor(list.color.swiftUIColor)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(list.color.swiftUIColor.opacity(0.1))
+                            )
+                    }
+
+                    // Priority Tag
+                    if task.priority != .none {
+                        Text(task.priority.title.uppercased())
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(task.priority.color.opacity(0.12))
+                                    .overlay(Capsule().stroke(task.priority.color.opacity(0.2), lineWidth: 0.5))
+                            )
+                            .foregroundColor(task.priority.color)
+                    }
+
+                    // Reminder indicator
+                    if let reminder = task.reminderDate, !task.isCompleted {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(reminder < Date() ? .red : .blue)
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.02))
+        )
+        .sheet(isPresented: $showReminderSheet) {
+            ReminderPickerSheet(
+                reminderDate: task.reminderDate,
+                initialDate: tempReminderDate,
+                onSet: { date in
+                    updateTask { item in
+                        item.reminderDate = date
+                        scheduleReminder(for: item, at: date)
+                    }
+                    showReminderSheet = false
+                },
+                onClear: {
+                    updateTask { item in
+                        item.reminderDate = nil
+                        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [item.id.uuidString])
+                    }
+                    showReminderSheet = false
+                },
+                onCancel: { showReminderSheet = false }
+            )
+        }
+        .contextMenu {
+            // Reminder
+            Button {
+                tempReminderDate = task.reminderDate ?? Date().addingTimeInterval(3600)
+                showReminderSheet = true
+            } label: {
+                Label(task.reminderDate == nil ? "Set Reminder" : "Edit Reminder", systemImage: "bell")
+            }
+            if task.reminderDate != nil {
+                Button {
+                    updateTask { item in
+                        item.reminderDate = nil
+                        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [item.id.uuidString])
+                    }
+                } label: {
+                    Label("Clear Reminder", systemImage: "bell.slash")
+                }
+            }
+
+            Divider()
+
+            // Format toggles
+            Button {
+                updateTask { $0.isBold.toggle() }
+            } label: {
+                Label(task.isBold ? "Remove Bold" : "Bold", systemImage: "bold")
+            }
+            Button {
+                updateTask { $0.isItalic.toggle() }
+            } label: {
+                Label(task.isItalic ? "Remove Italic" : "Italic", systemImage: "italic")
+            }
+            Button {
+                updateTask { $0.isStrikethrough.toggle() }
+            } label: {
+                Label(task.isStrikethrough ? "Remove Strikethrough" : "Strikethrough", systemImage: "strikethrough")
+            }
+
+            Divider()
+
+            // Priority submenu
+            Menu {
+                ForEach(Priority.allCases, id: \.self) { p in
+                    Button {
+                        updateTask { $0.priority = p }
+                    } label: {
+                        HStack {
+                            Text(p.title)
+                            if task.priority == p { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                Label("Priority", systemImage: "flag.fill")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                deleteTask()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private var listColor: Color {
+        store.lists.first(where: { $0.items.contains(where: { $0.id == task.id }) })?.color.swiftUIColor ?? .blue
+    }
+
+    private func toggleTaskCompletion() {
+        for i in 0..<store.lists.count {
+            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
+                store.lists[i].items[j].isCompleted.toggle()
+                store.lists[i].lastModified = Date()
+                store.save()
+                return
+            }
+        }
+    }
+
+    /// Mutate the task item in-place across all lists and save.
+    private func updateTask(_ mutation: (inout TaskItem) -> Void) {
+        for i in 0..<store.lists.count {
+            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
+                mutation(&store.lists[i].items[j])
+                store.lists[i].items[j].lastModified = Date()
+                store.lists[i].lastModified = Date()
+                store.save()
+                return
+            }
+        }
+    }
+
+    /// Delete a task from whichever list owns it.
+    private func deleteTask() {
+        for i in 0..<store.lists.count {
+            if let _ = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
+                store.lists[i].deletedItemIDs[task.id] = Date()
+                store.lists[i].items.removeAll { $0.id == task.id }
+                store.lists[i].lastModified = Date()
+                store.save()
+                return
+            }
+        }
+    }
+
+    private func scheduleReminder(for item: TaskItem, at date: Date) {
+        let content = UNMutableNotificationContent()
+        content.title = "Task Reminder"
+        content.body = item.content
+        content.sound = .default
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        let request = UNNotificationRequest(identifier: item.id.uuidString, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
+    }
+}
+#endif
+

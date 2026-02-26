@@ -92,6 +92,8 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var isStrikethrough: Bool = false
     var priority: Priority = .none
     var reminderDate: Date?
+    /// Wall-clock time of the last local edit. Used for last-writer-wins merge.
+    var lastModified: Date = Date()
 }
 
 // MARK: - Task List
@@ -105,6 +107,11 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
     @Published var color: ListColor = .blue
     @Published var sortDescending: Bool = true
     @Published var isVisible: Bool = true
+    /// Wall-clock time of the last local edit to this list's metadata.
+    var lastModified: Date = Date()
+    /// Tombstone map: item id → time it was deleted.
+    /// Items in this set are never resurrected by remote merges.
+    var deletedItemIDs: [UUID: Date] = [:]
 
     init(id: UUID = UUID(), title: String, items: [TaskItem] = [],
          position: CGPoint = .zero, size: CGSize = CGSize(width: 300, height: 400),
@@ -117,10 +124,12 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         self.color = color
         self.sortDescending = true
         self.isVisible = isVisible
+        self.lastModified = Date()
+        self.deletedItemIDs = [:]
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, items, position, size, color, sortDescending, isVisible
+        case id, title, items, position, size, color, sortDescending, isVisible, lastModified, deletedItemIDs
     }
 
     required init(from decoder: Decoder) throws {
@@ -133,18 +142,22 @@ class TaskList: Identifiable, Codable, Equatable, ObservableObject {
         color    = (try? container.decode(ListColor.self, forKey: .color)) ?? .blue
         sortDescending = (try? container.decode(Bool.self, forKey: .sortDescending)) ?? true
         isVisible = (try? container.decode(Bool.self, forKey: .isVisible)) ?? true
+        lastModified = (try? container.decode(Date.self, forKey: .lastModified)) ?? Date(timeIntervalSince1970: 0)
+        deletedItemIDs = (try? container.decode([UUID: Date].self, forKey: .deletedItemIDs)) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id,       forKey: .id)
-        try container.encode(title,    forKey: .title)
-        try container.encode(items,    forKey: .items)
-        try container.encode(position, forKey: .position)
-        try container.encode(size,     forKey: .size)
-        try container.encode(color,    forKey: .color)
+        try container.encode(id,             forKey: .id)
+        try container.encode(title,          forKey: .title)
+        try container.encode(items,          forKey: .items)
+        try container.encode(position,       forKey: .position)
+        try container.encode(size,           forKey: .size)
+        try container.encode(color,          forKey: .color)
         try container.encode(sortDescending, forKey: .sortDescending)
-        try container.encode(isVisible, forKey: .isVisible)
+        try container.encode(isVisible,      forKey: .isVisible)
+        try container.encode(lastModified,   forKey: .lastModified)
+        try container.encode(deletedItemIDs, forKey: .deletedItemIDs)
     }
 
     func sortItemsByPriority() {

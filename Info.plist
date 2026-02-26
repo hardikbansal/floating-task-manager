@@ -50,5 +50,14 @@
     <!-- Hardened runtime (required for notarisation) -->
     <key>com.apple.security.cs.allow-jit</key>
     <false/>
+
+    <!-- MultipeerConnectivity / local network sync -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Floating Task Manager uses your local network to sync tasks between your Mac and iPhone over Wi-Fi.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_ftm-sync._tcp</string>
+        <string>_ftm-sync._udp</string>
+    </array>
 </dict>
 </plist>

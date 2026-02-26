@@ -17,6 +17,7 @@ if [ $? -eq 0 ]; then
     cp .build/arm64-apple-macosx/debug/FloatingTaskManager "$APP_DIR/Contents/MacOS/"
     cp Info.plist "$APP_DIR/Contents/" 2>/dev/null || true
     cp Sources/FloatingTaskManager/AppIcon.png "$APP_DIR/Contents/Resources/" 2>/dev/null || true
+    cp GoogleService-Info.plist "$APP_DIR/Contents/Resources/" 2>/dev/null || true
 
     echo "🏃 Launching application..."
     open "$APP_DIR"

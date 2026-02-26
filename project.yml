@@ -1,0 +1,64 @@
+name: FloatingTaskManageriOS
+options:
+  minimumXcodeGenVersion: 2.44.0
+  deploymentTarget:
+    iOS: 16.0
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: "11.0.0"
+targets:
+  FloatingTaskManageriOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/FloatingTaskManager
+        excludes:
+          - AppIcon.png
+          - Assets.xcassets
+          - GoogleService-Info.plist
+      - path: Sources/FloatingTaskManager/GoogleService-Info.plist
+        buildPhase: resources
+        type: file
+    resources:
+      - path: Sources/FloatingTaskManager/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hardikbansal.FloatingTaskManager.iOS
+        PRODUCT_NAME: FloatingTaskManager
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: FloatingTaskManageriOS.entitlements
+    dependencies:
+      - package: Firebase
+        product: FirebaseFirestore
+      - package: Firebase
+        product: FirebaseAuth
+      - package: Firebase
+        product: FirebaseCore
+    entitlements:
+      path: FloatingTaskManageriOS.entitlements
+    info:
+      path: FloatingTaskManageriOS-Info.plist
+      properties:
+        CFBundleIconName: AppIcon
+        CFBundleDisplayName: "Floating Task Manager"
+        UIRequiresFullScreen: YES
+        UIApplicationSupportsIndirectInputEvents: YES
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - remote-notification
+        FirebaseAppDelegateProxyEnabled: NO
+schemes:
+  FloatingTaskManageriOS:
+    build:
+      targets:
+        FloatingTaskManageriOS: all
+    run:
+      config: Debug

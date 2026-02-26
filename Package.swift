@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "FloatingTaskManager",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v13), .iOS(.v16)],
     products: [
         .executable(name: "FloatingTaskManager", targets: ["FloatingTaskManager"])
     ],
@@ -11,7 +11,10 @@ let package = Package(
         .executableTarget(
             name: "FloatingTaskManager",
             path: "Sources/FloatingTaskManager",
-            resources: [.process("AppIcon.png")]
+            resources: [
+                .process("AppIcon.png"),
+                .process("Assets.xcassets")
+            ]
         )
     ]
 )

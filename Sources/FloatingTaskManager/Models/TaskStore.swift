@@ -5,71 +5,153 @@ import Foundation
 import AppKit
 #else
 import UIKit
+import FirebaseCore
 #endif
+
+// MARK: - Sync Status
+
+enum SyncStatus: Equatable {
+    case disconnected       // not signed in / offline
+    case connected          // signed in, listener active
+    case error(String)
+
+    var icon: String {
+        switch self {
+        case .disconnected:   return "icloud.slash"
+        case .connected:      return "checkmark.icloud"
+        case .error:          return "exclamationmark.triangle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .disconnected:   return .secondary
+        case .connected:      return .green
+        case .error:          return .red
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .disconnected:       return "Not syncing"
+        case .connected:          return "Synced"
+        case .error(let msg):     return "Error: \(msg)"
+        }
+    }
+}
+
+// MARK: - TaskStore
 
 class TaskStore: ObservableObject {
     @Published var lists: [TaskList] = []
     @Published var mergedTaskOrder: [UUID] = []
     @Published var mergedListPosition: CGPoint = .zero
     @Published var mergedListSize: CGSize = CGSize(width: 350, height: 500)
+    @Published var syncStatus: SyncStatus = .disconnected
 
     private var cancellables = Set<AnyCancellable>()
-
     private let savePath: URL
 
+    // Firebase cloud sync manager (iOS only; macOS uses a no-op stub)
+    // Lazy so it is created only after FirebaseApp.configure() has run.
+    lazy var firebaseSync: FirebaseSyncManager = FirebaseSyncManager()
+
+    // Debounce save + broadcast
+    private var saveWorkItem: DispatchWorkItem?
+    private var isApplyingRemoteData = false
+
+    /// Tombstone set for deleted lists — persisted so deletions survive app restarts.
+    private var deletedListIDs: [UUID: Date] = [:]
+
     init() {
-        let fileManager = FileManager.default
-        let localPath = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("FloatingTaskManager")
-            .appendingPathComponent("tasks.json")
-
-        // Try to find iCloud container
-        if let icloudURL = fileManager.url(forUbiquityContainerIdentifier: nil)?
-            .appendingPathComponent("Documents")
-            .appendingPathComponent("tasks.json") {
-            
-            savePath = icloudURL
-            print("☁️ Using iCloud storage: \(savePath.path)")
-            
-            // Ensure Documents directory exists in iCloud
-            try? fileManager.createDirectory(at: icloudURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            
-            // If local file exists but iCloud doesn't, migrate it
-            if fileManager.fileExists(atPath: localPath.path) && !fileManager.fileExists(atPath: icloudURL.path) {
-                print("📦 Migrating local data to iCloud...")
-                try? fileManager.copyItem(at: localPath, to: icloudURL)
-            }
+        #if os(iOS)
+        // Configure Firebase before anything accesses FirebaseSyncManager.
+        // This is the earliest safe point — before the lazy firebaseSync property is touched.
+        if FirebaseApp.app() == nil {
+            print("🔵 [TaskStore] FirebaseApp.configure() — not yet configured, configuring now")
+            FirebaseApp.configure()
         } else {
-            savePath = localPath
-            print("💾 Using local storage: \(savePath.path)")
+            print("🔵 [TaskStore] FirebaseApp already configured — skipping")
         }
+        #endif
 
-        try? fileManager.createDirectory(
-            at: savePath.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        let fm = FileManager.default
+        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("FloatingTaskManager")
+        try? fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        savePath = appSupport.appendingPathComponent("tasks.json")
+        print("🔵 [TaskStore] init — savePath=\(savePath.path)")
 
         load()
         setupObservers()
-        setupFilePresenter()
+        setupFirebaseSync()
+        setupAppLifecycleObservers()
     }
 
-    private func setupFilePresenter() {
-        // Simple polling for now or use NSFilePresenter for more robust sync.
-        // For simplicity, we'll reload when the app becomes active or on a timer if needed.
-        #if os(macOS)
-        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.load()
+    // MARK: - Setup
+
+    private func setupFirebaseSync() {
+        print("🔵 [TaskStore] setupFirebaseSync() — attaching sync status observer")
+        // Forward Firebase sync status to our published syncStatus
+        firebaseSync.$syncStatus
+            .receive(on: RunLoop.main)
+            .removeDuplicates()
+            .sink { [weak self] peerStatus in
+                guard let self else { return }
+                switch peerStatus {
+                case .disconnected:       self.syncStatus = .disconnected
+                case .connected:          self.syncStatus = .connected
+                case .error(let msg):     self.syncStatus = .error(msg)
+                }
+            }
+            .store(in: &cancellables)
+
+        // When Firestore delivers data from another device, apply it
+        firebaseSync.onReceivedData = { [weak self] data in
+            guard let self else { return }
+            print("🔵 [TaskStore] onReceivedData — \(data.count) bytes from remote device")
+            self.isApplyingRemoteData = true
+            self.applyData(data, save: true)
+            self.isApplyingRemoteData = false
         }
-        #else
-        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.load()
+
+        firebaseSync.start()
+    }
+
+    private func setupAppLifecycleObservers() {
+#if os(macOS)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            // Only reload from disk — do NOT save/broadcast, which would overwrite
+            // remote deletions with stale local data.
+            self?.loadFromDiskOnly()
         }
-        #endif
+#else
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.loadFromDiskOnly()
+        }
+#endif
+    }
+
+    /// Reload from disk without triggering a save or broadcast.
+    private func loadFromDiskOnly() {
+        guard FileManager.default.fileExists(atPath: savePath.path),
+              let data = try? Data(contentsOf: savePath) else { return }
+        print("🔵 [TaskStore] loadFromDiskOnly() — \(data.count) bytes")
+        applyData(data, save: false)
     }
 
     private func setupObservers() {
         cancellables.removeAll()
+
+        // Re-attach Firebase sync observation after clearing cancellables
+        setupFirebaseSync()
+
         for list in lists {
             list.objectWillChange
                 .receive(on: RunLoop.main)
@@ -80,39 +162,204 @@ class TaskStore: ObservableObject {
         }
     }
 
+    // MARK: - Save
+
     func save() {
+        // Debounce: coalesce rapid saves into one write
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.performSave()
+        }
+        saveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    private func performSave() {
         do {
-            let wrapper = StoreWrapper(
-                lists: lists, 
-                mergedTaskOrder: mergedTaskOrder,
-                mergedListPosition: mergedListPosition,
-                mergedListSize: mergedListSize
-            )
-            let data = try JSONEncoder().encode(wrapper)
-            try data.write(to: savePath)
+            let data = try encodeStore()
+            try data.write(to: savePath, options: .atomic)
+            print("🔵 [TaskStore] performSave() — wrote \(data.count) bytes to disk")
+
+            // Broadcast to Firebase so other devices pick it up.
+            // syncStatus is driven entirely by firebaseSync.$syncStatus — don't touch it here.
+            if !isApplyingRemoteData {
+                print("🔵 [TaskStore] broadcasting \(data.count) bytes to Firebase …")
+                firebaseSync.broadcast(data: data)
+            }
         } catch {
-            print("Failed to save tasks: \(error)")
+            print("🔴 [TaskStore] Save error: \(error)")
+            syncStatus = .error(error.localizedDescription)
         }
     }
 
-    private func load() {
-        guard FileManager.default.fileExists(atPath: savePath.path) else { return }
-        do {
-            let data = try Data(contentsOf: savePath)
-            if let wrapper = try? JSONDecoder().decode(StoreWrapper.self, from: data) {
-                lists = wrapper.lists
-                mergedTaskOrder = wrapper.mergedTaskOrder
-                mergedListPosition = wrapper.mergedListPosition ?? .zero
-                mergedListSize = wrapper.mergedListSize ?? CGSize(width: 350, height: 500)
-                setupObservers()
+    private func encodeStore() throws -> Data {
+        let wrapper = StoreWrapper(
+            lists: lists,
+            mergedTaskOrder: mergedTaskOrder,
+            mergedListPosition: mergedListPosition,
+            mergedListSize: mergedListSize,
+            deletedListIDs: deletedListIDs
+        )
+        return try JSONEncoder().encode(wrapper)
+    }
+
+    // MARK: - Load
+
+    func load() {
+        guard FileManager.default.fileExists(atPath: savePath.path) else {
+            print("🔵 [TaskStore] load() — no saved file at \(savePath.path), starting fresh")
+            return
+        }
+        guard let data = try? Data(contentsOf: savePath) else {
+            print("🔴 [TaskStore] load() — file exists but could not read data")
+            return
+        }
+        print("🔵 [TaskStore] load() — read \(data.count) bytes from disk")
+        applyData(data, save: false)
+    }
+
+    private func applyData(_ data: Data, save: Bool) {
+        print("🔵 [TaskStore] applyData() — \(data.count) bytes, save=\(save)")
+        guard let wrapper = try? JSONDecoder().decode(StoreWrapper.self, from: data) else {
+            print("🟡 [TaskStore] applyData() — failed to decode as StoreWrapper, trying legacy [TaskList] format")
+            // Legacy [TaskList] format fallback
+            if let legacyLists = try? JSONDecoder().decode([TaskList].self, from: data) {
+                print("🔵 [TaskStore] applyData() — legacy decode succeeded, \(legacyLists.count) lists")
+                DispatchQueue.main.async {
+                    self.lists = legacyLists
+                    self.setupObservers()
+                    if save { self.performSave() }
+                }
             } else {
-                // Fallback for old format
-                lists = try JSONDecoder().decode([TaskList].self, from: data)
+                print("🔴 [TaskStore] applyData() — could not decode data in any known format")
             }
-        } catch {
-            print("Failed to load tasks: \(error)")
+            return
+        }
+        print("🔵 [TaskStore] applyData() — decoded StoreWrapper with \(wrapper.lists.count) lists")
+        DispatchQueue.main.async {
+            self.mergeRemoteWrapper(wrapper, save: save)
         }
     }
+
+    /// Merge incoming remote wrapper using lastModified timestamps + tombstones.
+    /// Rules:
+    ///  - Tombstones are unioned: once deleted on any device, never resurrected
+    ///  - Lists that only exist remotely AND are not tombstoned locally → add locally
+    ///  - Lists that only exist locally AND are not tombstoned remotely → keep locally
+    ///  - Lists that exist on both sides → merge field-by-field: newer lastModified wins
+    ///  - Items inside a list: same tombstone + lastModified rules per item
+    private func mergeRemoteWrapper(_ remote: StoreWrapper, save: Bool) {
+        // 1. Union tombstones — a deletion on any device wins permanently
+        let mergedDeletedLists = deletedListIDs.merging(remote.deletedListIDs) { local, remote in
+            max(local, remote)  // keep the earlier deletion time (first delete wins)
+        }
+        deletedListIDs = mergedDeletedLists
+
+        var localById: [UUID: TaskList] = Dictionary(uniqueKeysWithValues: lists.map { ($0.id, $0) })
+        var merged: [TaskList] = []
+
+        for remoteList in remote.lists {
+            // Skip if this list is tombstoned on either side
+            if deletedListIDs[remoteList.id] != nil { continue }
+
+            if let localList = localById[remoteList.id] {
+                // Both sides have this list — pick winner per field
+                if remoteList.lastModified > localList.lastModified {
+                    localList.title          = remoteList.title
+                    localList.color          = remoteList.color
+                    localList.sortDescending = remoteList.sortDescending
+                    localList.isVisible      = remoteList.isVisible
+                    localList.lastModified   = remoteList.lastModified
+                }
+                // Merge item tombstones then items
+                let mergedItemTombstones = localList.deletedItemIDs.merging(remoteList.deletedItemIDs) { max($0, $1) }
+                localList.deletedItemIDs = mergedItemTombstones
+                localList.items = mergeItems(local: localList.items,
+                                             remote: remoteList.items,
+                                             deletedIDs: mergedItemTombstones)
+                merged.append(localList)
+                localById.removeValue(forKey: remoteList.id)
+            } else {
+                // New list from remote — add it (with its item tombstones)
+                merged.append(remoteList)
+            }
+        }
+
+        // Lists that remain in localById only exist locally
+        for (id, localList) in localById {
+            // Skip if tombstoned remotely
+            if deletedListIDs[id] != nil { continue }
+            merged.append(localList)
+        }
+
+        // Sort to keep stable order
+        let remoteOrder = remote.lists.map { $0.id }
+        merged.sort { a, b in
+            let ai = remoteOrder.firstIndex(of: a.id) ?? Int.max
+            let bi = remoteOrder.firstIndex(of: b.id) ?? Int.max
+            return ai < bi
+        }
+
+        self.lists = merged
+
+        // Merge UI state
+        if let rPos = remote.mergedListPosition, rPos != .zero {
+            self.mergedListPosition = rPos
+        }
+        if let rSize = remote.mergedListSize, rSize.width > 0 {
+            self.mergedListSize = rSize
+        }
+
+        // Merged task order: union, preserving remote order for known IDs
+        let allTaskIds = Set(merged.flatMap { $0.items.map { $0.id } })
+        let remoteOrderFiltered = remote.mergedTaskOrder.filter { allTaskIds.contains($0) }
+        let localOnlyIds = self.mergedTaskOrder.filter { !remoteOrderFiltered.contains($0) && allTaskIds.contains($0) }
+        self.mergedTaskOrder = remoteOrderFiltered + localOnlyIds
+
+        self.setupObservers()
+        if save { self.performSave() }
+    }
+
+    /// Merge two item arrays by id; tombstones win over everything, then newer lastModified wins.
+    private func mergeItems(local: [TaskItem], remote: [TaskItem], deletedIDs: [UUID: Date]) -> [TaskItem] {
+        var localById: [UUID: TaskItem] = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        var merged: [TaskItem] = []
+
+        for remoteItem in remote {
+            // If tombstoned, skip entirely
+            if deletedIDs[remoteItem.id] != nil { continue }
+
+            if let localItem = localById[remoteItem.id] {
+                merged.append(remoteItem.lastModified > localItem.lastModified ? remoteItem : localItem)
+                localById.removeValue(forKey: remoteItem.id)
+            } else {
+                merged.append(remoteItem)
+            }
+        }
+        // Items only in local — keep unless tombstoned
+        for (id, localItem) in localById {
+            if deletedIDs[id] != nil { continue }
+            merged.append(localItem)
+        }
+        return merged
+    }
+
+    // MARK: - Manual Refresh
+
+    /// Force a full sync: re-broadcast current state to Firestore so other devices
+    /// pick it up, and (on macOS) trigger an immediate poll.
+    func manualRefresh() {
+        print("🔵 [TaskStore] manualRefresh() — user requested sync")
+        do {
+            let data = try encodeStore()
+            firebaseSync.broadcast(data: data)
+            firebaseSync.forcePoll()
+        } catch {
+            syncStatus = .error(error.localizedDescription)
+        }
+    }
+
+    // MARK: - CRUD
 
     func createNewList() {
         let newList = TaskList(title: "New List")
@@ -122,8 +369,22 @@ class TaskStore: ObservableObject {
     }
 
     func deleteList(_ list: TaskList) {
+        deletedListIDs[list.id] = Date()   // tombstone — prevents resurrection from remote
         lists.removeAll { $0.id == list.id }
         setupObservers()
+        save()
+    }
+
+    /// Call this whenever you mutate a list's properties so the timestamp is updated.
+    func touch(_ list: TaskList) {
+        list.lastModified = Date()
+        save()
+    }
+
+    /// Call this whenever you mutate a task item inside a list.
+    func touchItem(in list: TaskList) {
+        list.lastModified = Date()
+        // Update the item's own lastModified at call site too if needed
         save()
     }
 
@@ -132,9 +393,34 @@ class TaskStore: ObservableObject {
     }
 }
 
+// MARK: - StoreWrapper
+
 struct StoreWrapper: Codable {
     var lists: [TaskList]
     var mergedTaskOrder: [UUID]
     var mergedListPosition: CGPoint?
     var mergedListSize: CGSize?
+    /// Tombstone map: list id → time it was deleted.
+    /// Lists in this set are never resurrected by remote merges.
+    var deletedListIDs: [UUID: Date]
+
+    init(lists: [TaskList], mergedTaskOrder: [UUID],
+         mergedListPosition: CGPoint? = nil, mergedListSize: CGSize? = nil,
+         deletedListIDs: [UUID: Date] = [:]) {
+        self.lists = lists
+        self.mergedTaskOrder = mergedTaskOrder
+        self.mergedListPosition = mergedListPosition
+        self.mergedListSize = mergedListSize
+        self.deletedListIDs = deletedListIDs
+    }
+
+    // Backward-compatible decoding — old snapshots have no deletedListIDs
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lists               = try c.decode([TaskList].self, forKey: .lists)
+        mergedTaskOrder     = (try? c.decode([UUID].self, forKey: .mergedTaskOrder)) ?? []
+        mergedListPosition  = try? c.decode(CGPoint.self, forKey: .mergedListPosition)
+        mergedListSize      = try? c.decode(CGSize.self,  forKey: .mergedListSize)
+        deletedListIDs      = (try? c.decode([UUID: Date].self, forKey: .deletedListIDs)) ?? [:]
+    }
 }

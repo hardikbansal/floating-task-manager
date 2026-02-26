@@ -1,8 +1,43 @@
 import SwiftUI
+#if os(iOS)
+import FirebaseCore
+#endif
+#if os(macOS)
 import AppKit
 import Carbon
+#else
+import UIKit
+#endif
 import UserNotifications
 
+#if os(iOS)
+class AppDelegateIOS: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        print("🔵 [AppDelegate] application didFinishLaunching — configuring Firebase")
+        FirebaseApp.configure()
+        print("🔵 [AppDelegate] FirebaseApp.configure() done — app=\(FirebaseApp.app() != nil ? "ok" : "FAILED")")
+        requestNotificationPermission()
+        return true
+    }
+
+    private func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if granted {
+                print("🔵 [AppDelegate] Notification permission granted.")
+            } else if let error = error {
+                print("🔴 [AppDelegate] Notification permission error: \(error.localizedDescription)")
+            } else {
+                print("🟡 [AppDelegate] Notification permission denied by user.")
+            }
+        }
+    }
+}
+#endif
+
+#if os(macOS)
 class AppDelegate: NSObject, NSApplicationDelegate {
     var store = TaskStore()
     private var globalHotKey: EventHotKeyRef?
@@ -174,26 +209,61 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupAppIcon() {
-        // Find AppIcon.png relative to the binary
-        let bundlePath = Bundle.main.bundlePath
-        let iconPath = (bundlePath as NSString).appendingPathComponent("Contents/Resources/AppIcon.png")
-        
-        // Fallback for running from CLI/Debug folder
-        let localPath = "Sources/FloatingTaskManager/AppIcon.png"
-        
-        if let image = NSImage(contentsOfFile: iconPath) ?? NSImage(contentsOfFile: localPath) {
+        // 1. Try asset catalog (works when built via Xcode with Assets.xcassets)
+        if let image = NSImage(named: "AppIcon") {
             NSApp.applicationIconImage = image
+            return
+        }
+
+        // 2. Try bundle resources – works when run via `swift run` / SPM
+        if let url = Bundle.main.url(forResource: "AppIcon-1024", withExtension: "png") ??
+                     Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = image
+            return
+        }
+
+        // 3. Fallback: path inside .app bundle
+        let bundlePath = Bundle.main.bundlePath
+        let candidates = [
+            (bundlePath as NSString).appendingPathComponent("Contents/Resources/AppIcon.png"),
+            (bundlePath as NSString).appendingPathComponent("Contents/Resources/AppIcon-1024.png"),
+            "Sources/FloatingTaskManager/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png",
+            "Sources/FloatingTaskManager/AppIcon.png"
+        ]
+        for path in candidates {
+            if let image = NSImage(contentsOfFile: path) {
+                NSApp.applicationIconImage = image
+                return
+            }
         }
     }
 }
+#endif
 
 @main
 struct FloatingTaskManagerApp: App {
+    #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(AppDelegateIOS.self) var appDelegate
+    #endif
+
+    @StateObject var store = TaskStore()
+    @StateObject var windowManager = WindowManager.shared
 
     var body: some Scene {
+        #if os(macOS)
         Settings {
             SettingsView()
         }
+        #else
+        WindowGroup {
+            MainIOSView()
+                .environmentObject(store)
+                .environmentObject(windowManager)
+        }
+        #endif
     }
 }
