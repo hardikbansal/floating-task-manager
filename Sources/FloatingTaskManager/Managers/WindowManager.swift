@@ -167,19 +167,20 @@ class WindowManager: NSObject, ObservableObject {
             override var canBecomeMain: Bool { return true }
         }
 
-        let origin = store.mergedListPosition == .zero ? randomPosition() : store.mergedListPosition
+        let windowSize = store.mergedListSize
+        let origin = store.mergedListPosition == .zero ? topCenterPosition(for: windowSize) : store.mergedListPosition
         let window = BorderlessMergedWindow(
-            contentRect: NSRect(origin: origin, size: store.mergedListSize),
+            contentRect: NSRect(origin: origin, size: windowSize),
             styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
         window.isOpaque = false
-        window.level = .floating
+        window.level = .normal
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
         window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.collectionBehavior = []
         window.isRestorable = false
         window.isReleasedWhenClosed = false
 
@@ -301,6 +302,14 @@ class WindowManager: NSObject, ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private func topCenterPosition(for size: CGSize) -> NSPoint {
+        guard let screen = NSScreen.main else { return .zero }
+        let f = screen.visibleFrame
+        let x = f.minX + (f.width - size.width) / 2
+        let y = f.maxY - size.height - 40 // 40pt margin from top to stay below menu bar area typically
+        return NSPoint(x: x, y: y)
+    }
 
     private func randomPosition() -> NSPoint {
         guard let screen = NSScreen.main else { return .zero }
