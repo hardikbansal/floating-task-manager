@@ -17,10 +17,16 @@ struct GlassBackground: View {
     
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(Color.white.opacity(0.85))
+            .fill(Color.white.opacity(1.0).mix(with: .black, by: 0.05)) // Use mix for slight tint
             .background(
-                VisualEffectView(material: .popover, blendingMode: .behindWindow)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                Group {
+                    #if os(macOS)
+                    VisualEffectView(material: .popover, blendingMode: .behindWindow)
+                    #else
+                    VisualEffectView(material: .systemMaterial)
+                    #endif
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             )
             .overlay(
                 showBorder ?
@@ -76,9 +82,13 @@ struct MeshGradientView: View {
 
 extension Color {
     func mix(with other: Color, by amount: CGFloat) -> Color {
-        // Simple approximation of color mixing
         let amount = max(0, min(1, amount))
+        #if os(macOS)
         return Color(NSColor(self).blended(withFraction: amount, of: NSColor(other)) ?? NSColor(self))
+        #else
+        // Simplified mix for iOS
+        return self.opacity(1.0 - Double(amount))
+        #endif
     }
 }
 
@@ -117,6 +127,9 @@ struct PremiumButtonStyle: ButtonStyle {
 
 // MARK: - Visual Effect
 
+// MARK: - Visual Effect
+
+#if os(macOS)
 struct VisualEffectView: NSViewRepresentable {
     let material: NSVisualEffectView.Material
     let blendingMode: NSVisualEffectView.BlendingMode
@@ -138,3 +151,17 @@ struct VisualEffectView: NSViewRepresentable {
         nsView.blendingMode = blendingMode
     }
 }
+#else
+struct VisualEffectView: UIViewRepresentable {
+    // Map macOS materials to iOS blur styles where possible
+    var material: UIBlurEffect.Style = .systemMaterial
+    
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: material))
+    }
+    
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
+        uiView.effect = UIBlurEffect(style: material)
+    }
+}
+#endif

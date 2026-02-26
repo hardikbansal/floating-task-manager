@@ -59,8 +59,12 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(30)
+        #if os(macOS)
         .frame(width: 480, height: 380)
         .background(VisualEffectView(material: .windowBackground, blendingMode: .behindWindow))
+        #else
+        .background(VisualEffectView(material: .systemMaterial))
+        #endif
     }
 }
 
@@ -122,5 +126,4 @@ struct SettingsToggleTile: View {
         .buttonStyle(PlainButtonStyle())
     }
 }
-
 

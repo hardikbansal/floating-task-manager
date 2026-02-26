@@ -1,6 +1,11 @@
 import SwiftUI
 import Combine
 import Foundation
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 class TaskStore: ObservableObject {
     @Published var lists: [TaskList] = []
@@ -13,18 +18,54 @@ class TaskStore: ObservableObject {
     private let savePath: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        savePath = appSupport
+        let fileManager = FileManager.default
+        let localPath = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("FloatingTaskManager")
             .appendingPathComponent("tasks.json")
 
-        try? FileManager.default.createDirectory(
+        // Try to find iCloud container
+        if let icloudURL = fileManager.url(forUbiquityContainerIdentifier: nil)?
+            .appendingPathComponent("Documents")
+            .appendingPathComponent("tasks.json") {
+            
+            savePath = icloudURL
+            print("☁️ Using iCloud storage: \(savePath.path)")
+            
+            // Ensure Documents directory exists in iCloud
+            try? fileManager.createDirectory(at: icloudURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            
+            // If local file exists but iCloud doesn't, migrate it
+            if fileManager.fileExists(atPath: localPath.path) && !fileManager.fileExists(atPath: icloudURL.path) {
+                print("📦 Migrating local data to iCloud...")
+                try? fileManager.copyItem(at: localPath, to: icloudURL)
+            }
+        } else {
+            savePath = localPath
+            print("💾 Using local storage: \(savePath.path)")
+        }
+
+        try? fileManager.createDirectory(
             at: savePath.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
 
         load()
         setupObservers()
+        setupFilePresenter()
+    }
+
+    private func setupFilePresenter() {
+        // Simple polling for now or use NSFilePresenter for more robust sync.
+        // For simplicity, we'll reload when the app becomes active or on a timer if needed.
+        #if os(macOS)
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.load()
+        }
+        #else
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.load()
+        }
+        #endif
     }
 
     private func setupObservers() {

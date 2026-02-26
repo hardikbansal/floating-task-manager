@@ -1,5 +1,7 @@
 import SwiftUI
 
+#if os(macOS)
+
 struct FloatingButtonView: View {
     @AppStorage("baseFontSize") var baseFontSize: Double = 13.0
     @EnvironmentObject var store: TaskStore
@@ -319,3 +321,5 @@ struct ListPanelRow: View {
         .onHover { isHovered = $0 }
     }
 }
+
+#endif

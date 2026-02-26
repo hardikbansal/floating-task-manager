@@ -1,6 +1,11 @@
 import Foundation
 import Combine
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 // MARK: - List Color
 
@@ -21,8 +26,16 @@ enum ListColor: String, Codable, CaseIterable {
 
     static func from(color: Color) -> ListColor {
         // Simple hue-based mapping
-        let nsColor = NSColor(color).usingColorSpace(.deviceRGB) ?? .blue
-        let hue = nsColor.hueComponent
+        let hue: CGFloat
+        #if os(macOS)
+        let platformColor = NSColor(color).usingColorSpace(.deviceRGB) ?? .blue
+        hue = platformColor.hueComponent
+        #else
+        let platformColor = UIColor(color)
+        var extractedHue: CGFloat = 0
+        platformColor.getHue(&extractedHue, saturation: nil, brightness: nil, alpha: nil)
+        hue = extractedHue
+        #endif
         switch hue {
         case 0.55...0.70: return .blue
         case 0.70...0.85: return .purple

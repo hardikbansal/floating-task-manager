@@ -1,15 +1,21 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 class WindowManager: NSObject, ObservableObject {
     static let shared = WindowManager()
 
     // Track open windows by list ID
+    #if os(macOS)
     private var windows: [UUID: NSWindow] = [:]
-    // Published set of open list IDs so views can observe open/close state
-    @Published private(set) var openWindowIDs: Set<UUID> = []
     private var floatingButtonID: UUID?
     private var settingsWindow: NSWindow?
+    #endif
+    // Published set of open list IDs so views can observe open/close state
+    @Published private(set) var openWindowIDs: Set<UUID> = []
     let MERGED_LIST_ID = UUID(uuidString: "DEADBEEF-0000-0000-0000-000000000000")!
     var taskStore: TaskStore?
 
@@ -20,17 +26,24 @@ class WindowManager: NSObject, ObservableObject {
     // MARK: - Query
 
     func isWindowOpen(for listID: UUID) -> Bool {
-        openWindowIDs.contains(listID)
+        #if os(macOS)
+        return openWindowIDs.contains(listID)
+        #else
+        return false // Transitioning to NavigationStack on iOS
+        #endif
     }
 
     /// Check if a window is managed by this manager (either a list window or the floating button)
+    #if os(macOS)
     func isManaged(_ window: NSWindow) -> Bool {
         windows.values.contains(window)
     }
+    #endif
 
     // MARK: - Floating Button
 
     func showFloatingButton() {
+        #if os(macOS)
         guard let store = taskStore else { return }
 
         let window = NSWindow(
@@ -66,12 +79,14 @@ class WindowManager: NSObject, ObservableObject {
         let buttonID = UUID()
         self.floatingButtonID = buttonID
         windows[buttonID] = window
+        #endif
     }
 
     // MARK: - List Windows
 
     /// Open window for list, or bring existing one to front.
     func openOrFocusListWindow(for list: TaskList, store: TaskStore) {
+        #if os(macOS)
         if let existing = windows[list.id] {
             existing.makeKeyAndOrderFront(nil)
             existing.orderFrontRegardless()
@@ -83,9 +98,13 @@ class WindowManager: NSObject, ObservableObject {
             return
         }
         createListWindow(for: list, store: store)
+        #else
+        // iOS handled by navigation
+        #endif
     }
 
     func createListWindow(for list: TaskList, store: TaskStore) {
+        #if os(macOS)
         class BorderlessListWindow: NSWindow {
             override var canBecomeKey: Bool { return true }
             override var canBecomeMain: Bool { return true }
@@ -150,11 +169,13 @@ class WindowManager: NSObject, ObservableObject {
                     print("💾 Persisted isVisible=false for list: \(list.title)")
                 }
         }
+        #endif
     }
 
     // MARK: - Merged List Window
 
     func openOrFocusMergedListWindow(store: TaskStore) {
+        #if os(macOS)
         if let existing = windows[MERGED_LIST_ID] {
             existing.makeKeyAndOrderFront(nil)
             existing.orderFrontRegardless()
@@ -214,19 +235,23 @@ class WindowManager: NSObject, ObservableObject {
                 self?.windows.removeValue(forKey: self?.MERGED_LIST_ID ?? UUID())
                 self?.openWindowIDs.remove(self?.MERGED_LIST_ID ?? UUID())
         }
+        #endif
     }
 
     /// Refresh appearance of all managed windows
     func updateWindowsAppearance() {
+        #if os(macOS)
         let enableShadows = UserDefaults.standard.bool(forKey: "enableShadows")
         for (id, window) in windows {
             if id == floatingButtonID { continue }
             window.hasShadow = enableShadows
             window.invalidateShadow()
         }
+        #endif
     }
 
     func showSettingsWindowManual() {
+        #if os(macOS)
         if let existing = settingsWindow {
             existing.makeKeyAndOrderFront(nil)
             existing.orderFrontRegardless()
@@ -261,9 +286,11 @@ class WindowManager: NSObject, ObservableObject {
             forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
                 self?.settingsWindow = nil
         }
+        #endif
     }
 
     /// Move all managed windows to the specified screen preserving relative positions
+    #if os(macOS)
     func moveAllWindows(to targetScreen: NSScreen) {
         let targetVisibleFrame = targetScreen.visibleFrame
         let managedWindows = windows.filter { $0.key != floatingButtonID }
@@ -294,15 +321,18 @@ class WindowManager: NSObject, ObservableObject {
         }
         taskStore?.save()
     }
+    #endif
 
     /// Close a list window without deleting the list.
     func closeListWindow(for listID: UUID) {
+        #if os(macOS)
         windows[listID]?.close()
-        // willCloseNotification handles dictionary cleanup
+        #endif
     }
 
     // MARK: - Helpers
 
+    #if os(macOS)
     private func topCenterPosition(for size: CGSize) -> NSPoint {
         guard let screen = NSScreen.main else { return .zero }
         let f = screen.visibleFrame
@@ -318,4 +348,5 @@ class WindowManager: NSObject, ObservableObject {
         let y = CGFloat.random(in: f.minY + 60 ... max(f.minY + 60, f.maxY - 460))
         return NSPoint(x: x, y: y)
     }
+    #endif
 }
