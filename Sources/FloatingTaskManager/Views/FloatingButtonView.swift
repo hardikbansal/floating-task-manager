@@ -179,6 +179,10 @@ struct ListsPanel: View {
                     windowManager.showSettingsWindowManual()
                     showPanel = false
                 }
+                QuickActionButton(title: "Merged", icon: "square.grid.2x2.fill") {
+                    windowManager.openOrFocusMergedListWindow(store: store)
+                    showPanel = false
+                }
                 
                 let screens = NSScreen.screens
                 if screens.count > 1 {

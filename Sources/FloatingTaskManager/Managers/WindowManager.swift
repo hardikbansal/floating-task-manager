@@ -10,6 +10,7 @@ class WindowManager: NSObject, ObservableObject {
     @Published private(set) var openWindowIDs: Set<UUID> = []
     private var floatingButtonID: UUID?
     private var settingsWindow: NSWindow?
+    let MERGED_LIST_ID = UUID(uuidString: "DEADBEEF-0000-0000-0000-000000000000")!
     var taskStore: TaskStore?
 
     func setTaskStore(_ store: TaskStore) {
@@ -148,6 +149,69 @@ class WindowManager: NSObject, ObservableObject {
                     store.save()
                     print("💾 Persisted isVisible=false for list: \(list.title)")
                 }
+        }
+    }
+
+    // MARK: - Merged List Window
+
+    func openOrFocusMergedListWindow(store: TaskStore) {
+        if let existing = windows[MERGED_LIST_ID] {
+            existing.makeKeyAndOrderFront(nil)
+            existing.orderFrontRegardless()
+            openWindowIDs.insert(MERGED_LIST_ID)
+            return
+        }
+
+        class BorderlessMergedWindow: NSWindow {
+            override var canBecomeKey: Bool { return true }
+            override var canBecomeMain: Bool { return true }
+        }
+
+        let origin = store.mergedListPosition == .zero ? randomPosition() : store.mergedListPosition
+        let window = BorderlessMergedWindow(
+            contentRect: NSRect(origin: origin, size: store.mergedListSize),
+            styleMask: [.borderless, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.level = .floating
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
+        window.hasShadow = UserDefaults.standard.bool(forKey: "enableShadows")
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.isRestorable = false
+        window.isReleasedWhenClosed = false
+
+        window.contentView = NSHostingView(rootView:
+            MergedTaskListView()
+                .environmentObject(store)
+                .environmentObject(self)
+        )
+
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+
+        windows[MERGED_LIST_ID] = window
+        openWindowIDs.insert(MERGED_LIST_ID)
+
+        // Persist position/size
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: window, queue: .main) { _ in
+                store.mergedListPosition = window.frame.origin
+                store.save()
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: window, queue: .main) { _ in
+                store.mergedListSize = window.frame.size
+                store.save()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                self?.windows.removeValue(forKey: self?.MERGED_LIST_ID ?? UUID())
+                self?.openWindowIDs.remove(self?.MERGED_LIST_ID ?? UUID())
         }
     }
 

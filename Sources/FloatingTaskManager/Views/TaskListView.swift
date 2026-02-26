@@ -36,6 +36,8 @@ struct TaskListView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .textFieldStyle(PlainTextFieldStyle())
                     .onSubmit { store.save() }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: 200, alignment: .leading)
 
                 Spacer()
 
@@ -77,16 +79,44 @@ struct TaskListView: View {
 
             // ── Items ──
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 4) {
-                    ForEach($list.items) { $item in
-                        TaskItemRow(item: $item,
-                                    onDelete: { 
-                                        withAnimation(.spring()) {
-                                            list.items.removeAll { $0.id == item.id }
-                                            store.save()
-                                        }
-                                    },
-                                    onChange:  { store.save() })
+                VStack(alignment: .leading, spacing: 16) {
+                    // Active Tasks
+                    LazyVStack(spacing: 4) {
+                        ForEach($list.items.filter { !$0.wrappedValue.isCompleted }) { $item in
+                            TaskItemRow(item: $item,
+                                        onDelete: { deleteItem(item.id) },
+                                        onChange: { store.save() })
+                        }
+                    }
+
+                    // Completed Tasks
+                    let completedItems = $list.items.filter { $0.wrappedValue.isCompleted }
+                    if !completedItems.isEmpty {
+                        DisclosureGroup {
+                            LazyVStack(spacing: 4) {
+                                ForEach(completedItems) { $item in
+                                    TaskItemRow(item: $item,
+                                                onDelete: { deleteItem(item.id) },
+                                                onChange: { store.save() })
+                                }
+                            }
+                            .padding(.top, 8)
+                        } label: {
+                            HStack {
+                                Text("Completed")
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("\(completedItems.count)")
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.secondary.opacity(0.6))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.primary.opacity(0.05)))
+                            }
+                        }
+                        .accentColor(.secondary)
+                        .padding(.horizontal, 8)
                     }
                 }
                 .padding(.vertical, 12)
@@ -150,6 +180,13 @@ struct TaskListView: View {
         list.items.append(TaskItem(content: trimmed))
         newItemContent = ""
         store.save()
+    }
+
+    private func deleteItem(_ id: UUID) {
+        withAnimation(.spring()) {
+            list.items.removeAll { $0.id == id }
+            store.save()
+        }
     }
 }
 
@@ -250,6 +287,8 @@ struct TaskItemRow: View {
                     .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
             }
             .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
+            .lineLimit(1)
+            .layoutPriority(1)
 
             // Priority Tag
             if item.priority != .none {
@@ -263,10 +302,11 @@ struct TaskItemRow: View {
                             .overlay(Capsule().stroke(item.priority.color.opacity(0.2), lineWidth: 0.5))
                     )
                     .foregroundColor(item.priority.color)
+                    .fixedSize()
             }
 
             // Format toolbar
-            if rowHovered {
+            if rowHovered || showReminderPicker {
                 HStack(spacing: 4) {
                     HStack(spacing: 2) {
                         FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           onChange() }
@@ -295,10 +335,26 @@ struct TaskItemRow: View {
                             Text("Set Reminder")
                                 .font(.system(size: 13, weight: .bold, design: .rounded))
                             
-                            DatePicker("", selection: $tempReminderDate)
+                            DatePicker("", selection: $tempReminderDate, displayedComponents: [.date])
                                 .datePickerStyle(GraphicalDatePickerStyle())
                                 .labelsHidden()
                                 .frame(width: 260)
+                                
+                            DatePicker("Time", selection: $tempReminderDate, displayedComponents: [.hourAndMinute])
+                                .labelsHidden()
+                                .frame(width: 150)
+
+                            HStack(spacing: 8) {
+                                PresetPill(title: "+1h") { tempReminderDate = Date().addingTimeInterval(3600) }
+                                PresetPill(title: "+6h") { tempReminderDate = Date().addingTimeInterval(6 * 3600) }
+                                PresetPill(title: "+1d") { tempReminderDate = Date().addingTimeInterval(24 * 3600) }
+                                PresetPill(title: "9AM") {
+                                    var nextDay = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+                                    nextDay = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: nextDay) ?? nextDay
+                                    tempReminderDate = nextDay
+                                }
+                            }
+                            .padding(.top, 4)
 
                             HStack {
                                 if item.reminderDate != nil {
@@ -353,10 +409,12 @@ struct TaskItemRow: View {
                     .buttonStyle(PremiumButtonStyle())
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .fixedSize()
             }
         }
+        .frame(minHeight: 32)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(rowHovered ? Color.primary.opacity(0.04) : Color.clear)
@@ -413,6 +471,29 @@ struct FormatToggle: View {
                 .frame(width: 20, height: 20)
                 .background(RoundedRectangle(cornerRadius: 4)
                     .fill(active ? Color.blue.opacity(0.15) : Color.clear))
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - Preset Pill
+
+struct PresetPill: View {
+    let title: String
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.blue.opacity(0.1))
+                        .overlay(Capsule().stroke(Color.blue.opacity(0.2), lineWidth: 0.5))
+                )
+                .foregroundColor(.blue)
         }
         .buttonStyle(PlainButtonStyle())
     }

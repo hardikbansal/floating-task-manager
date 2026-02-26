@@ -9,8 +9,17 @@ if [ $? -eq 0 ]; then
     # Kill any running instance first
     pkill -f FloatingTaskManager 2>/dev/null
 
+    echo "📦 Packaging application bundle..."
+    APP_DIR=".build/FloatingTaskManager.app"
+    mkdir -p "$APP_DIR/Contents/MacOS"
+    mkdir -p "$APP_DIR/Contents/Resources"
+    
+    cp .build/arm64-apple-macosx/debug/FloatingTaskManager "$APP_DIR/Contents/MacOS/"
+    cp Info.plist "$APP_DIR/Contents/" 2>/dev/null || true
+    cp Sources/FloatingTaskManager/AppIcon.png "$APP_DIR/Contents/Resources/" 2>/dev/null || true
+
     echo "🏃 Launching application..."
-    ./.build/arm64-apple-macosx/debug/FloatingTaskManager &
+    open "$APP_DIR"
     echo ""
     echo "✨ Application launched!"
     echo "   • Floating ＋ button appears at the bottom-right of your screen"
