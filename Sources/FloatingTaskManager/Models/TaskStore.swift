@@ -59,6 +59,7 @@ class TaskStore: ObservableObject {
     // Debounce save + broadcast
     private var saveWorkItem: DispatchWorkItem?
     private var isApplyingRemoteData = false
+    private var wasPreviouslySignedIn = false
 
     /// Tombstone set for deleted lists — persisted so deletions survive app restarts.
     private var deletedListIDs: [UUID: Date] = [:]
@@ -106,13 +107,31 @@ class TaskStore: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Clear all local data when the user signs out.
+        firebaseSync.$authState
+            .receive(on: RunLoop.main)
+            .removeDuplicates()
+            .sink { [weak self] authState in
+                guard let self else { return }
+                switch authState {
+                case .signedIn:
+                    self.wasPreviouslySignedIn = true
+                case .signedOut:
+                    if self.wasPreviouslySignedIn {
+                        self.clearAllLocalDataAfterSignOut()
+                    }
+                    self.wasPreviouslySignedIn = false
+                }
+            }
+            .store(in: &cancellables)
+
         // When Firestore delivers data from another device, apply it
         firebaseSync.onReceivedData = { [weak self] data in
             guard let self else { return }
             print("🔵 [TaskStore] onReceivedData — \(data.count) bytes from remote device")
             self.isApplyingRemoteData = true
             self.applyData(data, save: true)
-            self.isApplyingRemoteData = false
+            // Note: isApplyingRemoteData is reset inside applyData's async block
         }
 
         firebaseSync.start()
@@ -152,6 +171,12 @@ class TaskStore: ObservableObject {
         // Re-attach Firebase sync observation after clearing cancellables
         setupFirebaseSync()
 
+        resubscribeListObservers()
+    }
+
+    /// Subscribe to objectWillChange on every list so TaskStore forwards changes to SwiftUI.
+    /// Call this whenever self.lists is replaced without tearing down Firebase subscriptions.
+    private func resubscribeListObservers() {
         for list in lists {
             list.objectWillChange
                 .receive(on: RunLoop.main)
@@ -226,18 +251,22 @@ class TaskStore: ObservableObject {
             if let legacyLists = try? JSONDecoder().decode([TaskList].self, from: data) {
                 print("🔵 [TaskStore] applyData() — legacy decode succeeded, \(legacyLists.count) lists")
                 DispatchQueue.main.async {
+                    self.lists.forEach { $0.objectWillChange.send() }
                     self.lists = legacyLists
-                    self.setupObservers()
+                    self.resubscribeListObservers()
                     if save { self.performSave() }
+                    self.isApplyingRemoteData = false
                 }
             } else {
                 print("🔴 [TaskStore] applyData() — could not decode data in any known format")
+                self.isApplyingRemoteData = false
             }
             return
         }
         print("🔵 [TaskStore] applyData() — decoded StoreWrapper with \(wrapper.lists.count) lists")
         DispatchQueue.main.async {
             self.mergeRemoteWrapper(wrapper, save: save)
+            self.isApplyingRemoteData = false
         }
     }
 
@@ -300,6 +329,10 @@ class TaskStore: ObservableObject {
             return ai < bi
         }
 
+        // Notify each list that its contents changed so SwiftUI re-renders rows.
+        // TaskList is a class — mutating its items/properties in-place doesn't
+        // automatically trigger the parent store's @Published lists to refresh views.
+        merged.forEach { $0.objectWillChange.send() }
         self.lists = merged
 
         // Merge UI state
@@ -316,7 +349,7 @@ class TaskStore: ObservableObject {
         let localOnlyIds = self.mergedTaskOrder.filter { !remoteOrderFiltered.contains($0) && allTaskIds.contains($0) }
         self.mergedTaskOrder = remoteOrderFiltered + localOnlyIds
 
-        self.setupObservers()
+        self.resubscribeListObservers()
         if save { self.performSave() }
     }
 
@@ -330,7 +363,15 @@ class TaskStore: ObservableObject {
             if deletedIDs[remoteItem.id] != nil { continue }
 
             if let localItem = localById[remoteItem.id] {
-                merged.append(remoteItem.lastModified > localItem.lastModified ? remoteItem : localItem)
+                if remoteItem.lastModified > localItem.lastModified {
+                    merged.append(remoteItem)
+                } else if localItem.lastModified > remoteItem.lastModified {
+                    merged.append(localItem)
+                } else {
+                    // Timestamp tie: prefer remote when payload differs so cloud-originated
+                    // edits still apply even if lastModified wasn't bumped upstream.
+                    merged.append(remoteItem == localItem ? localItem : remoteItem)
+                }
                 localById.removeValue(forKey: remoteItem.id)
             } else {
                 merged.append(remoteItem)
@@ -390,6 +431,31 @@ class TaskStore: ObservableObject {
 
     func getAllTasks() -> [TaskItem] {
         lists.flatMap { $0.items }
+    }
+
+    // MARK: - Sign-out cleanup
+
+    /// Clears in-memory + on-disk task data after auth transitions from signed-in to signed-out.
+    private func clearAllLocalDataAfterSignOut() {
+        print("🔵 [TaskStore] clearAllLocalDataAfterSignOut()")
+        saveWorkItem?.cancel()
+
+        lists = []
+        mergedTaskOrder = []
+        mergedListPosition = .zero
+        mergedListSize = CGSize(width: 350, height: 500)
+        deletedListIDs = [:]
+        isApplyingRemoteData = false
+        syncStatus = .disconnected
+
+        do {
+            if FileManager.default.fileExists(atPath: savePath.path) {
+                try FileManager.default.removeItem(at: savePath)
+                print("🔵 [TaskStore] Removed local snapshot at \(savePath.path)")
+            }
+        } catch {
+            print("🔴 [TaskStore] Failed to remove local snapshot: \(error)")
+        }
     }
 }
 

@@ -426,22 +426,25 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     private var sseTask: URLSessionDataTask?
     private var sseBuffer: String = ""
     private var pollTimer: Timer?
-    private var lastKnownDeviceId: String?  // to skip our own writes
+    private var lastKnownUpdatedAt: String?  // Firestore updatedAt — skips already-processed snapshots
 
     // Keychain keys
     private static let keychainRefreshTokenKey = "ftm.firebase.refreshToken"
     private static let keychainUIDKey          = "ftm.firebase.uid"
     private static let keychainEmailKey        = "ftm.firebase.email"
+    private static let defaultsRefreshTokenKey = "ftm.defaults.firebase.refreshToken"
+    private static let defaultsUIDKey          = "ftm.defaults.firebase.uid"
+    private static let defaultsEmailKey        = "ftm.defaults.firebase.email"
 
     // MARK: - Init
 
     override init() {
         super.init()
-        // Restore session from keychain on launch
-        if let _ = Self.keychainLoad(key: Self.keychainRefreshTokenKey),
-           let uid = Self.keychainLoad(key: Self.keychainUIDKey) {
+        // Restore session on launch.
+        if let _ = Self.secureLoad(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey),
+           let uid = Self.secureLoad(key: Self.keychainUIDKey, defaultsKey: Self.defaultsUIDKey) {
             currentUID = uid
-            let email = Self.keychainLoad(key: Self.keychainEmailKey) ?? uid
+            let email = Self.secureLoad(key: Self.keychainEmailKey, defaultsKey: Self.defaultsEmailKey) ?? uid
             DispatchQueue.main.async {
                 self.authState = .signedIn(email: email)
             }
@@ -453,6 +456,12 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     func start() {
         guard case .signedIn = authState else {
             DispatchQueue.main.async { self.syncStatus = .disconnected }
+            return
+        }
+        guard !Self.projectId.isEmpty else {
+            DispatchQueue.main.async {
+                self.syncStatus = .error("GoogleService-Info.plist missing PROJECT_ID.")
+            }
             return
         }
         refreshTokenThenListen()
@@ -467,6 +476,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     func forcePoll() {
         guard let uid = currentUID else { return }
         print("🔵 [macOS FirebaseSyncManager] forcePoll()")
+        lastKnownUpdatedAt = nil   // clear dedup so the next poll always re-applies
         pollFirestore(uid: uid)
     }
 
@@ -480,6 +490,13 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
         if Self.apiKey.isEmpty {
             let err = NSError(domain: "FirebaseSyncManager", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "GoogleService-Info.plist not found or API_KEY is missing. Make sure the plist is in the project root and rebuild."
+            ])
+            DispatchQueue.main.async { self.syncStatus = .error(err.localizedDescription); completion(err) }
+            return
+        }
+        if Self.projectId.isEmpty {
+            let err = NSError(domain: "FirebaseSyncManager", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "GoogleService-Info.plist not found or PROJECT_ID is missing. Make sure the plist is bundled with the app."
             ])
             DispatchQueue.main.async { self.syncStatus = .error(err.localizedDescription); completion(err) }
             return
@@ -556,18 +573,18 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     }
 
     private func saveSession(refreshToken: String, uid: String, email: String) {
-        Self.keychainSave(key: Self.keychainRefreshTokenKey, value: refreshToken)
-        Self.keychainSave(key: Self.keychainUIDKey,          value: uid)
-        Self.keychainSave(key: Self.keychainEmailKey,        value: email)
+        Self.secureSave(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey, value: refreshToken)
+        Self.secureSave(key: Self.keychainUIDKey,          defaultsKey: Self.defaultsUIDKey,          value: uid)
+        Self.secureSave(key: Self.keychainEmailKey,        defaultsKey: Self.defaultsEmailKey,        value: email)
     }
 
     func signOut() {
         stop()
         currentUID = nil
         idToken    = nil
-        Self.keychainDelete(key: Self.keychainRefreshTokenKey)
-        Self.keychainDelete(key: Self.keychainUIDKey)
-        Self.keychainDelete(key: Self.keychainEmailKey)
+        Self.secureDelete(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey)
+        Self.secureDelete(key: Self.keychainUIDKey,          defaultsKey: Self.defaultsUIDKey)
+        Self.secureDelete(key: Self.keychainEmailKey,        defaultsKey: Self.defaultsEmailKey)
         DispatchQueue.main.async {
             self.authState  = .signedOut
             self.syncStatus = .disconnected
@@ -616,7 +633,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     // MARK: - Private: token management
 
     private func refreshTokenThenListen() {
-        guard let refreshToken = Self.keychainLoad(key: Self.keychainRefreshTokenKey) else {
+        guard let refreshToken = Self.secureLoad(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey) else {
             DispatchQueue.main.async { self.syncStatus = .disconnected }
             return
         }
@@ -640,7 +657,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
         if let token = idToken, Date() < idTokenExpiry {
             block(token); return
         }
-        guard let refreshToken = Self.keychainLoad(key: Self.keychainRefreshTokenKey) else {
+        guard let refreshToken = Self.secureLoad(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey) else {
             block(nil); return
         }
         exchangeRefreshToken(refreshToken) { [weak self] result in
@@ -771,7 +788,17 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
             URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
                 guard let self else { return }
-                if let error { print("❌ Firestore poll error: \(error)"); return }
+                if let error {
+                    print("❌ Firestore poll error: \(error)")
+                    DispatchQueue.main.async { self.syncStatus = .error("Firestore poll failed: \(error.localizedDescription)") }
+                    return
+                }
+                if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+                    print("❌ Firestore poll HTTP \(http.statusCode): \(raw)")
+                    DispatchQueue.main.async { self.syncStatus = .error("Firestore poll HTTP \(http.statusCode)") }
+                    return
+                }
                 guard let data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let fields = json["fields"] as? [String: Any],
@@ -779,16 +806,24 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
                       let jsonString = payloadField["stringValue"] as? String,
                       let deviceIdField = fields["deviceId"] as? [String: Any],
                       let deviceId = deviceIdField["stringValue"] as? String
-                else { return }
+                else {
+                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+                    print("❌ Firestore poll parse error: \(raw)")
+                    DispatchQueue.main.async { self.syncStatus = .error("Firestore snapshot parse failed.") }
+                    return
+                }
+
+                // Extract the server-assigned updatedAt timestamp for deduplication
+                let updatedAt = (json["updateTime"] as? String) ?? (json["createTime"] as? String) ?? ""
 
                 // Skip if this was written by this Mac
                 guard deviceId != Self.deviceID else { return }
-                // Skip if we already processed this exact snapshot
-                guard deviceId != self.lastKnownDeviceId else { return }
+                // Skip if we already processed this exact snapshot version
+                guard updatedAt != self.lastKnownUpdatedAt else { return }
 
                 guard let payload = jsonString.data(using: .utf8) else { return }
-                self.lastKnownDeviceId = deviceId
-                print("📥 Received \(payload.count) bytes from Firestore REST (device: \(deviceId))")
+                self.lastKnownUpdatedAt = updatedAt
+                print("📥 Received \(payload.count) bytes from Firestore REST (device: \(deviceId), updatedAt: \(updatedAt))")
                 DispatchQueue.main.async {
                     self.onReceivedData?(payload)
                 }
@@ -798,11 +833,44 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
     // MARK: - Keychain helpers
 
+    private static let keychainService = "com.hardikbansal.FloatingTaskManager.Firebase"
+
+    private static var useKeychain: Bool {
+        if ProcessInfo.processInfo.environment["FTM_DISABLE_KEYCHAIN"] == "1" { return false }
+        if UserDefaults.standard.bool(forKey: "ftm.disableKeychain") { return false }
+        return true
+    }
+
+    private static func secureSave(key: String, defaultsKey: String, value: String) {
+        if useKeychain {
+            keychainSave(key: key, value: value)
+        } else {
+            UserDefaults.standard.set(value, forKey: defaultsKey)
+        }
+    }
+
+    private static func secureLoad(key: String, defaultsKey: String) -> String? {
+        if useKeychain {
+            return keychainLoad(key: key)
+        }
+        return UserDefaults.standard.string(forKey: defaultsKey)
+    }
+
+    private static func secureDelete(key: String, defaultsKey: String) {
+        if useKeychain {
+            keychainDelete(key: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
+        }
+    }
+
     private static func keychainSave(key: String, value: String) {
         let data = value.data(using: .utf8)!
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
             kSecAttrAccount: key,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
             kSecValueData:   data
         ]
         SecItemDelete(query as CFDictionary)
@@ -812,6 +880,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     private static func keychainLoad(key: String) -> String? {
         let query: [CFString: Any] = [
             kSecClass:            kSecClassGenericPassword,
+            kSecAttrService:      keychainService,
             kSecAttrAccount:      key,
             kSecReturnData:       true,
             kSecMatchLimit:       kSecMatchLimitOne
@@ -825,6 +894,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     private static func keychainDelete(key: String) {
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
             kSecAttrAccount: key
         ]
         SecItemDelete(query as CFDictionary)

@@ -134,6 +134,8 @@ struct MergedTaskListView: View {
         for i in 0..<store.lists.count {
             if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
                 store.lists[i].items[j].isCompleted.toggle()
+                store.lists[i].items[j].lastModified = Date()
+                store.lists[i].lastModified = Date()
                 store.save()
                 return
             }
@@ -242,6 +244,8 @@ struct MergedTaskRow: View {
         for i in 0..<store.lists.count {
             if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
                 store.lists[i].items[j].isCompleted.toggle()
+                store.lists[i].items[j].lastModified = Date()
+                store.lists[i].lastModified = Date()
                 store.save()
                 return
             }
@@ -460,4 +464,3 @@ struct IOSMergedTaskRow: View {
     }
 }
 #endif
-

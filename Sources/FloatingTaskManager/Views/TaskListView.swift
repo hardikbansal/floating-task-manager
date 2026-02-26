@@ -34,13 +34,13 @@ struct TaskListView: View {
                 }
                 .buttonStyle(PremiumButtonStyle())
                 .popover(isPresented: $showColorPicker, arrowEdge: .bottom) {
-                    ColorSwatchPicker(selected: $list.color, onPick: { store.save() })
+                    ColorSwatchPicker(selected: $list.color, onPick: { store.touch(list) })
                 }
 
                 TextField("List Title", text: $list.title)
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .textFieldStyle(PlainTextFieldStyle())
-                    .onSubmit { store.save() }
+                    .onSubmit { store.touch(list) }
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(maxWidth: 200, alignment: .leading)
 
@@ -52,7 +52,7 @@ struct TaskListView: View {
                         withAnimation(PremiumTheme.spring()) {
                             list.sortDescending.toggle()
                             list.sortItemsByPriority()
-                            store.save() 
+                            store.touch(list)
                         }
                     }) {
                         Image(systemName: list.sortDescending ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
@@ -92,7 +92,7 @@ struct TaskListView: View {
                         ForEach($list.items.filter { !$0.wrappedValue.isCompleted }) { $item in
                             TaskItemRow(item: $item,
                                         onDelete: { deleteItem(item.id) },
-                                        onChange: { store.save() })
+                                        onChange: { store.touchItem(in: list) })
                         }
                     }
 
@@ -104,7 +104,7 @@ struct TaskListView: View {
                                 ForEach(completedItems) { $item in
                                     TaskItemRow(item: $item,
                                                 onDelete: { deleteItem(item.id) },
-                                                onChange: { store.save() })
+                                                onChange: { store.touchItem(in: list) })
                                 }
                             }
                             .padding(.top, 8)
@@ -207,7 +207,7 @@ struct TaskListView: View {
                     }
                     .sheet(isPresented: $showColorPicker) {
                         NavigationStack {
-                            ColorSwatchPicker(selected: $list.color, onPick: { store.save() })
+                            ColorSwatchPicker(selected: $list.color, onPick: { store.touch(list) })
                                 .navigationTitle("List Color")
                                 .navigationBarTitleDisplayMode(.inline)
                                 .toolbar {
@@ -221,7 +221,7 @@ struct TaskListView: View {
 
                     TextField("List Title", text: $list.title)
                         .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .onSubmit { store.save() }
+                        .onSubmit { store.touch(list) }
 
                     Spacer()
 
@@ -230,7 +230,7 @@ struct TaskListView: View {
                         withAnimation(.spring()) {
                             list.sortDescending.toggle()
                             list.sortItemsByPriority()
-                            store.save()
+                            store.touch(list)
                         }
                     }) {
                         Image(systemName: list.sortDescending ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
@@ -260,7 +260,7 @@ struct TaskListView: View {
                             IOSTaskRow(item: $list.items[index],
                                        listColor: list.color.swiftUIColor,
                                        onDelete: { deleteItem(item.id) },
-                                       onChange: { store.save() })
+                                       onChange: { store.touchItem(in: list) })
                                 .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
@@ -276,7 +276,9 @@ struct TaskListView: View {
                                         withAnimation(.spring()) {
                                             var mutableItem = list.items[index]
                                             cyclePriority(&mutableItem)
+                                            mutableItem.lastModified = Date()
                                             list.items[index] = mutableItem
+                                            list.lastModified = Date()
                                             store.save()
                                         }
                                     } label: {
@@ -300,7 +302,7 @@ struct TaskListView: View {
                                 IOSTaskRow(item: $list.items[index],
                                            listColor: list.color.swiftUIColor,
                                            onDelete: { deleteItem(item.id) },
-                                           onChange: { store.save() })
+                                           onChange: { store.touchItem(in: list) })
                                     .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                                     .listRowSeparator(.hidden)
                                     .listRowBackground(Color.clear)
@@ -392,7 +394,7 @@ struct TaskListView: View {
         let completedItems = list.items.filter { $0.isCompleted }
         let itemById = Dictionary(uniqueKeysWithValues: list.items.map { ($0.id, $0) })
         list.items = activeIds.compactMap { itemById[$0] } + completedItems
-        store.save()
+        store.touch(list)
     }
 
     /// Remove all completed tasks from this list.
@@ -402,7 +404,7 @@ struct TaskListView: View {
             list.deletedItemIDs[id] = Date()
         }
         list.items.removeAll { $0.isCompleted }
-        store.save()
+        store.touch(list)
     }
 
     private func cyclePriority(_ item: inout TaskItem) {
@@ -439,14 +441,14 @@ struct TaskListView: View {
         guard !trimmed.isEmpty else { return }
         list.items.append(TaskItem(content: trimmed))
         newItemContent = ""
-        store.save()
+        store.touch(list)
     }
 
     private func deleteItem(_ id: UUID) {
         withAnimation(.spring()) {
             list.deletedItemIDs[id] = Date()   // tombstone — prevents remote resurrection
             list.items.removeAll { $0.id == id }
-            store.save()
+            store.touch(list)
         }
     }
 }
@@ -505,6 +507,12 @@ struct TaskItemRow: View {
     var onDelete: () -> Void
     var onChange: () -> Void
 
+    /// Stamps item.lastModified so the last-writer-wins merge keeps this change.
+    private func stampAndSave() {
+        item.lastModified = Date()
+        onChange()
+    }
+
     @State private var rowHovered = false
     @State private var showReminderPicker = false
     @State private var tempReminderDate = Date()
@@ -524,7 +532,7 @@ struct TaskItemRow: View {
                     if newValue {
                         removeReminder()
                     }
-                    onChange()
+                    stampAndSave()
                 }
 
             // Reminder Indicator
@@ -554,7 +562,7 @@ struct TaskItemRow: View {
                         )
                 }
 
-                TextField("Task...", text: $item.content, onCommit: onChange)
+                TextField("Task...", text: $item.content, onCommit: stampAndSave)
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
                     .italic(item.isItalic)
@@ -589,9 +597,9 @@ struct TaskItemRow: View {
             if showToolbar {
                 HStack(spacing: 4) {
                     HStack(spacing: 2) {
-                        FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           onChange() }
-                        FormatToggle(icon: "italic",         active: item.isItalic)          { item.isItalic.toggle();         onChange() }
-                        FormatToggle(icon: "strikethrough",  active: item.isStrikethrough)   { item.isStrikethrough.toggle();  onChange() }
+                        FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           stampAndSave() }
+                        FormatToggle(icon: "italic",         active: item.isItalic)          { item.isItalic.toggle();         stampAndSave() }
+                        FormatToggle(icon: "strikethrough",  active: item.isStrikethrough)   { item.isStrikethrough.toggle();  stampAndSave() }
                     }
                     .padding(2)
                     .background(Capsule().fill(Color.primary.opacity(0.05)))
@@ -662,7 +670,7 @@ struct TaskItemRow: View {
                     // Priority Picker
                     Menu {
                         ForEach(Priority.allCases, id: \.self) { p in
-                            Button(action: { item.priority = p; onChange() }) {
+                            Button(action: { item.priority = p; stampAndSave() }) {
                                 HStack {
                                     Text(p.title)
                                     if item.priority == p {
@@ -712,7 +720,7 @@ struct TaskItemRow: View {
 
     private func setReminder(at date: Date) {
         item.reminderDate = date
-        onChange()
+        stampAndSave()
 
         guard notificationCenter != nil else {
             print("⚠️ Cannot schedule notification: Not in an app bundle.")
@@ -733,7 +741,7 @@ struct TaskItemRow: View {
 
     private func removeReminder() {
         item.reminderDate = nil
-        onChange()
+        stampAndSave()
         notificationCenter?.removePendingNotificationRequests(withIdentifiers: [item.id.uuidString])
     }
 }
@@ -791,6 +799,12 @@ struct IOSTaskRow: View {
     var onDelete: () -> Void
     var onChange: () -> Void
 
+    /// Stamps item.lastModified so the last-writer-wins merge keeps this change.
+    private func stampAndSave() {
+        item.lastModified = Date()
+        onChange()
+    }
+
     @State private var showReminderSheet = false
     @State private var tempReminderDate = Date()
 
@@ -800,7 +814,7 @@ struct IOSTaskRow: View {
             ModernCheckbox(isChecked: $item.isCompleted, color: listColor)
                 .onChange(of: item.isCompleted) { newValue in
                     if newValue { removeReminder() }
-                    onChange()
+                    stampAndSave()
                 }
 
             // Reminder indicator
@@ -833,7 +847,7 @@ struct IOSTaskRow: View {
                     .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
                     .italic(item.isItalic)
                     .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
-                    .onChange(of: item.content) { _ in onChange() }
+                    .onChange(of: item.content) { _ in stampAndSave() }
             }
             .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
 
@@ -895,17 +909,17 @@ struct IOSTaskRow: View {
 
             // Format options
             Button {
-                item.isBold.toggle(); onChange()
+                item.isBold.toggle(); stampAndSave()
             } label: {
                 Label(item.isBold ? "Remove Bold" : "Bold", systemImage: "bold")
             }
             Button {
-                item.isItalic.toggle(); onChange()
+                item.isItalic.toggle(); stampAndSave()
             } label: {
                 Label(item.isItalic ? "Remove Italic" : "Italic", systemImage: "italic")
             }
             Button {
-                item.isStrikethrough.toggle(); onChange()
+                item.isStrikethrough.toggle(); stampAndSave()
             } label: {
                 Label(item.isStrikethrough ? "Remove Strikethrough" : "Strikethrough", systemImage: "strikethrough")
             }
@@ -916,7 +930,7 @@ struct IOSTaskRow: View {
             Menu {
                 ForEach(Priority.allCases, id: \.self) { p in
                     Button {
-                        item.priority = p; onChange()
+                        item.priority = p; stampAndSave()
                     } label: {
                         HStack {
                             Text(p.title)
@@ -942,7 +956,7 @@ struct IOSTaskRow: View {
 
     private func setReminder(at date: Date) {
         item.reminderDate = date
-        onChange()
+        stampAndSave()
         let content = UNMutableNotificationContent()
         content.title = "Task Reminder"
         content.body = item.content
@@ -955,7 +969,7 @@ struct IOSTaskRow: View {
 
     private func removeReminder() {
         item.reminderDate = nil
-        onChange()
+        stampAndSave()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [item.id.uuidString])
     }
 }
@@ -1036,4 +1050,3 @@ struct ReminderPickerSheet: View {
     }
 }
 #endif
-
