@@ -40,6 +40,8 @@ targets:
         product: FirebaseAuth
       - package: Firebase
         product: FirebaseCore
+      - target: FloatingTaskManagerWidget
+        embed: true
     entitlements:
       path: FloatingTaskManageriOS.entitlements
     info:
@@ -55,10 +57,32 @@ targets:
         UIBackgroundModes:
           - remote-notification
         FirebaseAppDelegateProxyEnabled: NO
+
+  FloatingTaskManagerWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/FloatingTaskManagerWidget
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hardikbansal.FloatingTaskManager.iOS.widget
+        PRODUCT_NAME: FloatingTaskManagerWidget
+        INFOPLIST_KEY_CFBundleDisplayName: "Merged Tasks"
+        CODE_SIGN_STYLE: Automatic
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGN_ENTITLEMENTS: FloatingTaskManagerWidget.entitlements
+    info:
+      path: FloatingTaskManagerWidget-Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FloatingTaskManagerWidgets
 schemes:
   FloatingTaskManageriOS:
     build:
       targets:
         FloatingTaskManageriOS: all
+        FloatingTaskManagerWidget: all
     run:
       config: Debug

@@ -1,6 +1,15 @@
 import SwiftUI
 import UserNotifications
 
+private func mergedDurationText(minutes: Int?) -> String? {
+    guard let minutes, minutes > 0 else { return nil }
+    let hours = minutes / 60
+    let mins = minutes % 60
+    if hours > 0 && mins > 0 { return "\(hours)h \(mins)m" }
+    if hours > 0 { return "\(hours)h" }
+    return "\(mins)m"
+}
+
 struct MergedTaskListView: View {
     @EnvironmentObject var store: TaskStore
     @EnvironmentObject var windowManager: WindowManager
@@ -62,7 +71,14 @@ struct MergedTaskListView: View {
         }
         #if os(macOS)
         .frame(minWidth: 320, minHeight: 400)
-        .background(GlassBackground(cornerRadius: 16))
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.98))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 0.8)
+                )
+        )
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .containerShape(RoundedRectangle(cornerRadius: 16))
         .opacity(windowOpacity)
@@ -94,12 +110,12 @@ struct MergedTaskListView: View {
                 ForEach(orderedTasks) { task in
                     IOSMergedTaskRow(task: task)
                         .environmentObject(store)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowSeparator(.visible)
+                        .listRowBackground(Color(uiColor: .systemBackground))
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
-                                toggleTaskCompletion(task)
+                                store.toggleTaskCompletion(taskID: task.id)
                             } label: {
                                 Label(task.isCompleted ? "Undo" : "Done", systemImage: task.isCompleted ? "arrow.uturn.backward" : "checkmark")
                             }
@@ -130,17 +146,6 @@ struct MergedTaskListView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func toggleTaskCompletion(_ task: TaskItem) {
-        for i in 0..<store.lists.count {
-            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
-                store.lists[i].items[j].isCompleted.toggle()
-                store.lists[i].items[j].lastModified = Date()
-                store.lists[i].lastModified = Date()
-                store.save()
-                return
-            }
-        }
-    }
     #endif
 
     @ViewBuilder
@@ -231,25 +236,51 @@ struct MergedTaskRow: View {
                             )
                             .foregroundColor(task.priority.color)
                     }
+
+                    Text(task.status.title.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(task.status.color.opacity(0.12))
+                                .overlay(Capsule().stroke(task.status.color.opacity(0.22), lineWidth: 0.5))
+                        )
+                        .foregroundColor(task.status.color)
+
+                    if let duration = mergedDurationText(minutes: task.estimatedMinutes) {
+                        Text(duration)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(Color.blue.opacity(0.12))
+                                    .overlay(Capsule().stroke(Color.blue.opacity(0.22), lineWidth: 0.5))
+                            )
+                            .foregroundColor(.blue)
+                    }
                 }
             }
             Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
+                )
+        )
+        .shadow(color: .black.opacity(0.10), radius: 6, x: 0, y: 2)
         .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
     }
 
     private func toggleTaskCompletion() {
-        for i in 0..<store.lists.count {
-            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
-                store.lists[i].items[j].isCompleted.toggle()
-                store.lists[i].items[j].lastModified = Date()
-                store.lists[i].lastModified = Date()
-                store.save()
-                return
-            }
-        }
+        store.toggleTaskCompletion(taskID: task.id)
     }
 }
 
@@ -263,6 +294,8 @@ struct IOSMergedTaskRow: View {
 
     @State private var showReminderSheet = false
     @State private var tempReminderDate = Date()
+    @State private var showEstimateSheet = false
+    @State private var customEstimateText = ""
 
     var body: some View {
         HStack(spacing: 10) {
@@ -308,6 +341,30 @@ struct IOSMergedTaskRow: View {
                             .foregroundColor(task.priority.color)
                     }
 
+                    Text(task.status.title.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(task.status.color.opacity(0.12))
+                                .overlay(Capsule().stroke(task.status.color.opacity(0.22), lineWidth: 0.5))
+                        )
+                        .foregroundColor(task.status.color)
+
+                    if let duration = mergedDurationText(minutes: task.estimatedMinutes) {
+                        Text(duration)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(Color.blue.opacity(0.12))
+                                    .overlay(Capsule().stroke(Color.blue.opacity(0.22), lineWidth: 0.5))
+                            )
+                            .foregroundColor(.blue)
+                    }
+
                     // Reminder indicator
                     if let reminder = task.reminderDate, !task.isCompleted {
                         Image(systemName: "clock.fill")
@@ -318,12 +375,7 @@ struct IOSMergedTaskRow: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.02))
-        )
+        .padding(.vertical, 2)
         .sheet(isPresented: $showReminderSheet) {
             ReminderPickerSheet(
                 reminderDate: task.reminderDate,
@@ -344,6 +396,30 @@ struct IOSMergedTaskRow: View {
                 },
                 onCancel: { showReminderSheet = false }
             )
+        }
+        .sheet(isPresented: $showEstimateSheet) {
+            NavigationStack {
+                Form {
+                    Section("Estimate") {
+                        TextField("Minutes", text: $customEstimateText)
+                            .keyboardType(.numberPad)
+                    }
+                }
+                .navigationTitle("Task Estimate")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") { showEstimateSheet = false }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Save") {
+                            let value = Int(customEstimateText.trimmingCharacters(in: .whitespacesAndNewlines))
+                            updateTask { $0.estimatedMinutes = (value ?? 0) > 0 ? value : nil }
+                            showEstimateSheet = false
+                        }
+                    }
+                }
+            }
         }
         .contextMenu {
             // Reminder
@@ -401,6 +477,41 @@ struct IOSMergedTaskRow: View {
                 Label("Priority", systemImage: "flag.fill")
             }
 
+            Menu {
+                ForEach(TaskStatus.allCases, id: \.self) { status in
+                    Button {
+                        updateTask { $0.status = status }
+                    } label: {
+                        HStack {
+                            Label(status.title, systemImage: status.icon)
+                            if task.status == status { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                Label("Status", systemImage: "circle.lefthalf.filled")
+            }
+
+            Menu {
+                ForEach([15, 30, 45, 60, 90, 120], id: \.self) { mins in
+                    Button(mergedDurationText(minutes: mins) ?? "\(mins)m") {
+                        updateTask { $0.estimatedMinutes = mins }
+                    }
+                }
+                Divider()
+                Button("Custom…") {
+                    customEstimateText = task.estimatedMinutes.map(String.init) ?? ""
+                    showEstimateSheet = true
+                }
+                if task.estimatedMinutes != nil {
+                    Button("Clear", role: .destructive) {
+                        updateTask { $0.estimatedMinutes = nil }
+                    }
+                }
+            } label: {
+                Label("Estimate", systemImage: "timer")
+            }
+
             Divider()
 
             Button(role: .destructive) {
@@ -416,27 +527,12 @@ struct IOSMergedTaskRow: View {
     }
 
     private func toggleTaskCompletion() {
-        for i in 0..<store.lists.count {
-            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
-                store.lists[i].items[j].isCompleted.toggle()
-                store.lists[i].lastModified = Date()
-                store.save()
-                return
-            }
-        }
+        store.toggleTaskCompletion(taskID: task.id)
     }
 
     /// Mutate the task item in-place across all lists and save.
     private func updateTask(_ mutation: (inout TaskItem) -> Void) {
-        for i in 0..<store.lists.count {
-            if let j = store.lists[i].items.firstIndex(where: { $0.id == task.id }) {
-                mutation(&store.lists[i].items[j])
-                store.lists[i].items[j].lastModified = Date()
-                store.lists[i].lastModified = Date()
-                store.save()
-                return
-            }
-        }
+        store.updateTask(taskID: task.id, mutation: mutation)
     }
 
     /// Delete a task from whichever list owns it.

@@ -6,6 +6,9 @@ import AppKit
 #else
 import UIKit
 import FirebaseCore
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 #endif
 
 // MARK: - Sync Status
@@ -63,6 +66,12 @@ class TaskStore: ObservableObject {
 
     /// Tombstone set for deleted lists — persisted so deletions survive app restarts.
     private var deletedListIDs: [UUID: Date] = [:]
+    #if os(iOS)
+    private let widgetSnapshotFilename = "merged-widget-snapshot.json"
+    private let widgetSnapshotDefaultsKey = "merged-widget-snapshot-json"
+    private let widgetKind = "MergedTasksWidget"
+    private let appGroupID = "group.com.hardikbansal.floatingtaskmanager"
+    #endif
 
     init() {
         #if os(iOS)
@@ -204,6 +213,9 @@ class TaskStore: ObservableObject {
             let data = try encodeStore()
             try data.write(to: savePath, options: .atomic)
             print("🔵 [TaskStore] performSave() — wrote \(data.count) bytes to disk")
+            #if os(iOS)
+            writeWidgetSnapshot()
+            #endif
 
             // Broadcast to Firebase so other devices pick it up.
             // syncStatus is driven entirely by firebaseSync.$syncStatus — don't touch it here.
@@ -254,6 +266,9 @@ class TaskStore: ObservableObject {
                     self.lists.forEach { $0.objectWillChange.send() }
                     self.lists = legacyLists
                     self.resubscribeListObservers()
+                    #if os(iOS)
+                    self.writeWidgetSnapshot()
+                    #endif
                     if save { self.performSave() }
                     self.isApplyingRemoteData = false
                 }
@@ -349,6 +364,10 @@ class TaskStore: ObservableObject {
         let localOnlyIds = self.mergedTaskOrder.filter { !remoteOrderFiltered.contains($0) && allTaskIds.contains($0) }
         self.mergedTaskOrder = remoteOrderFiltered + localOnlyIds
 
+        #if os(iOS)
+        writeWidgetSnapshot()
+        #endif
+
         self.resubscribeListObservers()
         if save { self.performSave() }
     }
@@ -429,6 +448,29 @@ class TaskStore: ObservableObject {
         save()
     }
 
+    /// Centralized item mutation path to ensure item/list timestamps are always stamped.
+    func updateTask(taskID: UUID, mutation: (inout TaskItem) -> Void) {
+        for i in 0..<lists.count {
+            if let j = lists[i].items.firstIndex(where: { $0.id == taskID }) {
+                mutation(&lists[i].items[j])
+                lists[i].items[j].lastModified = Date()
+                lists[i].lastModified = Date()
+                save()
+                return
+            }
+        }
+    }
+
+    /// Toggles completion state with proper timestamp stamping for conflict-safe sync.
+    func toggleTaskCompletion(taskID: UUID) {
+        updateTask(taskID: taskID) { item in
+            item.isCompleted.toggle()
+            if item.isCompleted {
+                item.reminderDate = nil
+            }
+        }
+    }
+
     func getAllTasks() -> [TaskItem] {
         lists.flatMap { $0.items }
     }
@@ -453,10 +495,79 @@ class TaskStore: ObservableObject {
                 try FileManager.default.removeItem(at: savePath)
                 print("🔵 [TaskStore] Removed local snapshot at \(savePath.path)")
             }
+            #if os(iOS)
+            if let widgetURL = widgetSnapshotURL(),
+               FileManager.default.fileExists(atPath: widgetURL.path) {
+                try FileManager.default.removeItem(at: widgetURL)
+            }
+            UserDefaults(suiteName: appGroupID)?.removeObject(forKey: widgetSnapshotDefaultsKey)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
         } catch {
             print("🔴 [TaskStore] Failed to remove local snapshot: \(error)")
         }
     }
+
+    #if os(iOS)
+    private func widgetSnapshotURL() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)?
+            .appendingPathComponent(widgetSnapshotFilename)
+    }
+
+    private func writeWidgetSnapshot() {
+        let incompleteTasks = orderedMergedTasks().filter { !$0.isCompleted }
+        let preview = incompleteTasks.prefix(8).map {
+            WidgetTaskSnapshotItem(
+                id: $0.id,
+                content: $0.content,
+                isCompleted: $0.isCompleted,
+                priority: $0.priority.title,
+                status: $0.status.title,
+                estimatedMinutes: $0.estimatedMinutes
+            )
+        }
+        let snapshot = MergedWidgetSnapshot(
+            generatedAt: Date(),
+            completedCount: getAllTasks().filter(\.isCompleted).count,
+            totalCount: getAllTasks().count,
+            items: Array(preview)
+        )
+        do {
+            let data = try JSONEncoder().encode(snapshot)
+            if let url = widgetSnapshotURL() {
+                try data.write(to: url, options: .atomic)
+            } else {
+                print("🟡 [TaskStore] App Group container URL unavailable for widget snapshot file write")
+            }
+
+            if let json = String(data: data, encoding: .utf8) {
+                if let sharedDefaults = UserDefaults(suiteName: appGroupID) {
+                    sharedDefaults.set(json, forKey: widgetSnapshotDefaultsKey)
+                } else {
+                    print("🟡 [TaskStore] App Group defaults unavailable for widget snapshot defaults write")
+                }
+            }
+            WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch {
+            print("🟡 [TaskStore] Failed to write widget snapshot: \(error)")
+        }
+    }
+
+    private func orderedMergedTasks() -> [TaskItem] {
+        let allTasks = getAllTasks()
+        let taskMap = Dictionary(uniqueKeysWithValues: allTasks.map { ($0.id, $0) })
+        var sortedTasks: [TaskItem] = []
+        for id in mergedTaskOrder {
+            if let task = taskMap[id] { sortedTasks.append(task) }
+        }
+        let orderedIDs = Set(mergedTaskOrder)
+        for task in allTasks where !orderedIDs.contains(task.id) {
+            sortedTasks.append(task)
+        }
+        return sortedTasks
+    }
+    #endif
 }
 
 // MARK: - StoreWrapper
@@ -490,3 +601,21 @@ struct StoreWrapper: Codable {
         deletedListIDs      = (try? c.decode([UUID: Date].self, forKey: .deletedListIDs)) ?? [:]
     }
 }
+
+#if os(iOS)
+struct WidgetTaskSnapshotItem: Codable, Identifiable {
+    let id: UUID
+    let content: String
+    let isCompleted: Bool
+    let priority: String
+    let status: String
+    let estimatedMinutes: Int?
+}
+
+struct MergedWidgetSnapshot: Codable {
+    let generatedAt: Date
+    let completedCount: Int
+    let totalCount: Int
+    let items: [WidgetTaskSnapshotItem]
+}
+#endif

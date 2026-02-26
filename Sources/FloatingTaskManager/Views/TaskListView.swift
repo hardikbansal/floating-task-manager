@@ -4,6 +4,15 @@ import AppKit
 import SwiftUI
 import UserNotifications
 
+private func durationBadgeText(minutes: Int?) -> String? {
+    guard let minutes, minutes > 0 else { return nil }
+    let hours = minutes / 60
+    let mins = minutes % 60
+    if hours > 0 && mins > 0 { return "\(hours)h \(mins)m" }
+    if hours > 0 { return "\(hours)h" }
+    return "\(mins)m"
+}
+
 // MARK: - Task List View
 
 struct TaskListView: View {
@@ -86,9 +95,9 @@ struct TaskListView: View {
 
             // ── Items ──
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
                     // Active Tasks
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: 2) {
                         ForEach($list.items.filter { !$0.wrappedValue.isCompleted }) { $item in
                             TaskItemRow(item: $item,
                                         onDelete: { deleteItem(item.id) },
@@ -100,7 +109,7 @@ struct TaskListView: View {
                     let completedItems = $list.items.filter { $0.wrappedValue.isCompleted }
                     if !completedItems.isEmpty {
                         DisclosureGroup {
-                            LazyVStack(spacing: 4) {
+                            LazyVStack(spacing: 2) {
                                 ForEach(completedItems) { $item in
                                     TaskItemRow(item: $item,
                                                 onDelete: { deleteItem(item.id) },
@@ -126,7 +135,7 @@ struct TaskListView: View {
                         .padding(.horizontal, 8)
                     }
                 }
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
                 .padding(.horizontal, 8)
             }
 
@@ -172,7 +181,14 @@ struct TaskListView: View {
         }
         #if os(macOS)
         .frame(minWidth: 280, minHeight: 320)
-        .background(GlassBackground(cornerRadius: 16))
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.98))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 0.8)
+                )
+        )
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .containerShape(RoundedRectangle(cornerRadius: 16))
         .opacity(windowOpacity)
@@ -261,9 +277,9 @@ struct TaskListView: View {
                                        listColor: list.color.swiftUIColor,
                                        onDelete: { deleteItem(item.id) },
                                        onChange: { store.touchItem(in: list) })
-                                .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                .listRowSeparator(.visible)
+                                .listRowBackground(Color(uiColor: .systemBackground))
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button(role: .destructive) {
                                         withAnimation(.spring()) { deleteItem(item.id) }
@@ -303,9 +319,9 @@ struct TaskListView: View {
                                            listColor: list.color.swiftUIColor,
                                            onDelete: { deleteItem(item.id) },
                                            onChange: { store.touchItem(in: list) })
-                                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(Color.clear)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                    .listRowSeparator(.visible)
+                                    .listRowBackground(Color(uiColor: .systemBackground))
                                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                         Button(role: .destructive) {
                                             withAnimation(.spring()) { deleteItem(item.id) }
@@ -459,7 +475,7 @@ struct ColorSwatchPicker: View {
     @Binding var selected: ListColor
     var onPick: () -> Void
 
-    let columns = Array(repeating: GridItem(.fixed(28), spacing: 8), count: 4)
+    let columns = Array(repeating: GridItem(.fixed(28), spacing: 8), count: 5)
 
     var body: some View {
         VStack(spacing: 8) {
@@ -516,6 +532,8 @@ struct TaskItemRow: View {
     @State private var rowHovered = false
     @State private var showReminderPicker = false
     @State private var tempReminderDate = Date()
+    @State private var customEstimateText = ""
+    @State private var showDetailsInspector = false
 
     private var notificationCenter: UNUserNotificationCenter? {
         guard Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") else {
@@ -545,67 +563,87 @@ struct TaskItemRow: View {
                     #endif
             }
 
-            // Text field
-            ZStack(alignment: .leading) {
-                // Invisible text just to render a perfectly sized strikethrough line
-                if item.isCompleted || item.isStrikethrough {
-                    Text(item.content.isEmpty ? "Task..." : item.content)
+            VStack(alignment: .leading, spacing: 5) {
+                // Text field
+                ZStack(alignment: .leading) {
+                    // Invisible text just to render a perfectly sized strikethrough line
+                    if item.isCompleted || item.isStrikethrough {
+                        Text(item.content.isEmpty ? "Task..." : item.content)
+                            .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
+                            .italic(item.isItalic)
+                            .foregroundColor(.clear)
+                            .overlay(
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.8))
+                                    .frame(height: 1)
+                                    .offset(y: 1),
+                                alignment: .center
+                            )
+                    }
+
+                    TextField("Task...", text: $item.content, onCommit: stampAndSave)
+                        .textFieldStyle(PlainTextFieldStyle())
                         .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
                         .italic(item.isItalic)
-                        .foregroundColor(.clear)
-                        .overlay(
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.8))
-                                .frame(height: 1)
-                                .offset(y: 1),
-                            alignment: .center
-                        )
+                        .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
                 }
+                .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
+                .lineLimit(1)
 
-                TextField("Task...", text: $item.content, onCommit: stampAndSave)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
-                    .italic(item.isItalic)
-                    .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
+                HStack(spacing: 6) {
+                    Text(item.status.title.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(item.status.color.opacity(0.12))
+                                .overlay(Capsule().stroke(item.status.color.opacity(0.22), lineWidth: 0.5))
+                        )
+                        .foregroundColor(item.status.color)
+                        .fixedSize()
+
+                    if item.priority != .none {
+                        Text(item.priority.title.uppercased())
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(item.priority.color.opacity(0.12))
+                                    .overlay(Capsule().stroke(item.priority.color.opacity(0.2), lineWidth: 0.5))
+                            )
+                            .foregroundColor(item.priority.color)
+                            .fixedSize()
+                    }
+
+                    if let duration = durationBadgeText(minutes: item.estimatedMinutes) {
+                        Text(duration)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(Color.blue.opacity(0.10))
+                                    .overlay(Capsule().stroke(Color.blue.opacity(0.22), lineWidth: 0.5))
+                            )
+                            .foregroundColor(.blue)
+                            .fixedSize()
+                    }
+                    Spacer(minLength: 0)
+                }
             }
-            .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
-            .lineLimit(1)
             .layoutPriority(1)
-
-            // Priority Tag
-            if item.priority != .none {
-                Text(item.priority.title.uppercased())
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule()
-                            .fill(item.priority.color.opacity(0.12))
-                            .overlay(Capsule().stroke(item.priority.color.opacity(0.2), lineWidth: 0.5))
-                    )
-                    .foregroundColor(item.priority.color)
-                    .fixedSize()
-            }
 
             // Format toolbar
             #if os(macOS)
-            let showToolbar = rowHovered || showReminderPicker
+            let showToolbar = rowHovered || showReminderPicker || showDetailsInspector
             #else
             let showToolbar = false
             #endif
 
             if showToolbar {
-                HStack(spacing: 4) {
-                    HStack(spacing: 2) {
-                        FormatToggle(icon: "bold",           active: item.isBold)            { item.isBold.toggle();           stampAndSave() }
-                        FormatToggle(icon: "italic",         active: item.isItalic)          { item.isItalic.toggle();         stampAndSave() }
-                        FormatToggle(icon: "strikethrough",  active: item.isStrikethrough)   { item.isStrikethrough.toggle();  stampAndSave() }
-                    }
-                    .padding(2)
-                    .background(Capsule().fill(Color.primary.opacity(0.05)))
-                    
-                    Divider().frame(height: 12)
-
+                HStack(spacing: 10) {
                     // Reminder Button
                     Button(action: { 
                         tempReminderDate = item.reminderDate ?? Date().addingTimeInterval(3600)
@@ -666,50 +704,134 @@ struct TaskItemRow: View {
                         }
                         .padding(16)
                     }
-                    
-                    // Priority Picker
-                    Menu {
-                        ForEach(Priority.allCases, id: \.self) { p in
-                            Button(action: { item.priority = p; stampAndSave() }) {
-                                HStack {
-                                    Text(p.title)
-                                    if item.priority == p {
-                                        Image(systemName: "checkmark")
+
+                    Button {
+                        customEstimateText = item.estimatedMinutes.map(String.init) ?? ""
+                        showDetailsInspector = true
+                    } label: {
+                        Label("Details", systemImage: "line.3.horizontal")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
+                    .buttonStyle(PremiumButtonStyle())
+                    .popover(isPresented: $showDetailsInspector, arrowEdge: .trailing) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Task Details")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Formatting")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                Toggle("Bold", isOn: Binding(
+                                    get: { item.isBold },
+                                    set: { item.isBold = $0; stampAndSave() }
+                                ))
+                                Toggle("Italic", isOn: Binding(
+                                    get: { item.isItalic },
+                                    set: { item.isItalic = $0; stampAndSave() }
+                                ))
+                                Toggle("Strikethrough", isOn: Binding(
+                                    get: { item.isStrikethrough },
+                                    set: { item.isStrikethrough = $0; stampAndSave() }
+                                ))
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Status")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                Picker("Status", selection: Binding(
+                                    get: { item.status },
+                                    set: { item.status = $0; stampAndSave() }
+                                )) {
+                                    ForEach(TaskStatus.allCases, id: \.self) { status in
+                                        Label(status.title, systemImage: status.icon).tag(status)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Priority")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                Picker("Priority", selection: Binding(
+                                    get: { item.priority },
+                                    set: { item.priority = $0; stampAndSave() }
+                                )) {
+                                    ForEach(Priority.allCases, id: \.self) { p in
+                                        Text(p.title).tag(p)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Estimate (minutes)")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                HStack(spacing: 8) {
+                                    TextField("45", text: $customEstimateText)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 72)
+                                    Button("Set") {
+                                        let minutes = Int(customEstimateText.trimmingCharacters(in: .whitespacesAndNewlines))
+                                        item.estimatedMinutes = (minutes ?? 0) > 0 ? minutes : nil
+                                        stampAndSave()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    if item.estimatedMinutes != nil {
+                                        Button("Clear") {
+                                            item.estimatedMinutes = nil
+                                            customEstimateText = ""
+                                            stampAndSave()
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .foregroundColor(.red)
+                                    }
+                                }
+                                HStack(spacing: 6) {
+                                    ForEach([15, 30, 45, 60], id: \.self) { mins in
+                                        Button(durationBadgeText(minutes: mins) ?? "\(mins)m") {
+                                            item.estimatedMinutes = mins
+                                            customEstimateText = "\(mins)"
+                                            stampAndSave()
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.blue.opacity(0.1)))
+                                        .foregroundColor(.blue)
                                     }
                                 }
                             }
-                        }
-                    } label: {
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(item.priority == .none ? .secondary : item.priority.color)
-                            .frame(width: 24, height: 24)
-                            .background(Circle().fill(item.priority != .none ? item.priority.color.opacity(0.1) : Color.clear))
-                    }
-                    .fixedSize()
 
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10))
-                            .foregroundColor(.red.opacity(0.8))
-                            .frame(width: 24, height: 24)
+                            Divider()
+                            Button(role: .destructive, action: onDelete) {
+                                Label("Delete Task", systemImage: "trash")
+                            }
+                        }
+                        .frame(width: 300)
+                        .padding(14)
                     }
-                    .buttonStyle(PremiumButtonStyle())
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 .fixedSize()
             }
         }
         .frame(minHeight: 32)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(rowHovered ? Color.primary.opacity(0.04) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color.primary.opacity(rowHovered ? 0.05 : 0), lineWidth: 0.5)
-                )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.clear)
+        .overlay(
+            Rectangle()
+                .fill(Color.black.opacity(0.10))
+                .frame(height: 0.5),
+            alignment: .bottom
         )
         .contentShape(Rectangle())
         #if os(macOS)
@@ -743,26 +865,6 @@ struct TaskItemRow: View {
         item.reminderDate = nil
         stampAndSave()
         notificationCenter?.removePendingNotificationRequests(withIdentifiers: [item.id.uuidString])
-    }
-}
-
-// MARK: - Format Toggle
-
-struct FormatToggle: View {
-    let icon: String
-    let active: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: active ? .bold : .regular))
-                .foregroundColor(active ? .blue : .secondary)
-                .frame(width: 20, height: 20)
-                .background(RoundedRectangle(cornerRadius: 4)
-                    .fill(active ? Color.blue.opacity(0.15) : Color.clear))
-        }
-        .buttonStyle(PlainButtonStyle())
     }
 }
 
@@ -807,6 +909,8 @@ struct IOSTaskRow: View {
 
     @State private var showReminderSheet = false
     @State private var tempReminderDate = Date()
+    @State private var showEstimateSheet = false
+    @State private var customEstimateText = ""
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -817,63 +921,86 @@ struct IOSTaskRow: View {
                     stampAndSave()
                 }
 
-            // Reminder indicator
-            if let reminder = item.reminderDate, !item.isCompleted {
-                Image(systemName: "clock.fill")
-                    .font(.system(size: 9))
-                    .foregroundColor(reminder < Date() ? .red : .blue)
-                    .onTapGesture {
-                        tempReminderDate = reminder
-                        showReminderSheet = true
+            VStack(alignment: .leading, spacing: 3) {
+                // Editable text field
+                ZStack(alignment: .leading) {
+                    if item.isCompleted || item.isStrikethrough {
+                        Text(item.content.isEmpty ? "Task..." : item.content)
+                            .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
+                            .italic(item.isItalic)
+                            .foregroundColor(.clear)
+                            .overlay(
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.7))
+                                    .frame(height: 1)
+                                    .offset(y: 1),
+                                alignment: .center
+                            )
                     }
-            }
-
-            // Editable text field
-            ZStack(alignment: .leading) {
-                if item.isCompleted || item.isStrikethrough {
-                    Text(item.content.isEmpty ? "Task..." : item.content)
+                    TextField("Task...", text: $item.content)
                         .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
                         .italic(item.isItalic)
-                        .foregroundColor(.clear)
-                        .overlay(
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.7))
-                                .frame(height: 1)
-                                .offset(y: 1),
-                            alignment: .center
-                        )
+                        .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
+                        .onChange(of: item.content) { _ in stampAndSave() }
                 }
-                TextField("Task...", text: $item.content)
-                    .font(.system(size: baseFontSize, weight: item.isBold ? .bold : .medium, design: item.isItalic ? .default : .rounded))
-                    .italic(item.isItalic)
-                    .foregroundColor(item.isCompleted ? .secondary.opacity(0.6) : .primary)
-                    .onChange(of: item.content) { _ in stampAndSave() }
-            }
-            .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
+                .id("\(item.id)-\(item.isBold)-\(item.isItalic)-\(item.isStrikethrough)-\(item.isCompleted)")
+                .lineLimit(2)
 
+                HStack(spacing: 6) {
+                    Text(item.status.title.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(item.status.color.opacity(0.12))
+                                .overlay(Capsule().stroke(item.status.color.opacity(0.22), lineWidth: 0.5))
+                        )
+                        .foregroundColor(item.status.color)
+                        .fixedSize()
+
+                    if item.priority != .none {
+                        Text(item.priority.title.uppercased())
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(item.priority.color.opacity(0.12))
+                                    .overlay(Capsule().stroke(item.priority.color.opacity(0.2), lineWidth: 0.5))
+                            )
+                            .foregroundColor(item.priority.color)
+                            .fixedSize()
+                    }
+
+                    if let duration = durationBadgeText(minutes: item.estimatedMinutes) {
+                        Text(duration)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(Color.blue.opacity(0.10))
+                                    .overlay(Capsule().stroke(Color.blue.opacity(0.22), lineWidth: 0.5))
+                            )
+                            .foregroundColor(.blue)
+                            .fixedSize()
+                    }
+
+                    if let reminder = item.reminderDate, !item.isCompleted {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(reminder < Date() ? .red : .blue)
+                            .onTapGesture {
+                                tempReminderDate = reminder
+                                showReminderSheet = true
+                            }
+                    }
+                }
+            }
             Spacer()
-
-            // Priority tag
-            if item.priority != .none {
-                Text(item.priority.title.uppercased())
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule()
-                            .fill(item.priority.color.opacity(0.12))
-                            .overlay(Capsule().stroke(item.priority.color.opacity(0.2), lineWidth: 0.5))
-                    )
-                    .foregroundColor(item.priority.color)
-                    .fixedSize()
-            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.02))
-        )
+        .padding(.vertical, 2)
         .sheet(isPresented: $showReminderSheet) {
             ReminderPickerSheet(
                 reminderDate: item.reminderDate,
@@ -888,6 +1015,31 @@ struct IOSTaskRow: View {
                 },
                 onCancel: { showReminderSheet = false }
             )
+        }
+        .sheet(isPresented: $showEstimateSheet) {
+            NavigationStack {
+                Form {
+                    Section("Estimate") {
+                        TextField("Minutes", text: $customEstimateText)
+                            .keyboardType(.numberPad)
+                    }
+                }
+                .navigationTitle("Task Estimate")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") { showEstimateSheet = false }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Save") {
+                            let value = Int(customEstimateText.trimmingCharacters(in: .whitespacesAndNewlines))
+                            item.estimatedMinutes = (value ?? 0) > 0 ? value : nil
+                            stampAndSave()
+                            showEstimateSheet = false
+                        }
+                    }
+                }
+            }
         }
         .contextMenu {
             // Reminder
@@ -942,6 +1094,44 @@ struct IOSTaskRow: View {
                 }
             } label: {
                 Label("Priority", systemImage: "flag.fill")
+            }
+
+            Menu {
+                ForEach(TaskStatus.allCases, id: \.self) { status in
+                    Button {
+                        item.status = status
+                        stampAndSave()
+                    } label: {
+                        HStack {
+                            Label(status.title, systemImage: status.icon)
+                            if item.status == status { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                Label("Status", systemImage: "circle.lefthalf.filled")
+            }
+
+            Menu {
+                ForEach([15, 30, 45, 60, 90, 120], id: \.self) { mins in
+                    Button(durationBadgeText(minutes: mins) ?? "\(mins)m") {
+                        item.estimatedMinutes = mins
+                        stampAndSave()
+                    }
+                }
+                Divider()
+                Button("Custom…") {
+                    customEstimateText = item.estimatedMinutes.map(String.init) ?? ""
+                    showEstimateSheet = true
+                }
+                if item.estimatedMinutes != nil {
+                    Button("Clear", role: .destructive) {
+                        item.estimatedMinutes = nil
+                        stampAndSave()
+                    }
+                }
+            } label: {
+                Label("Estimate", systemImage: "timer")
             }
 
             Divider()
