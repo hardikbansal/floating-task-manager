@@ -93,6 +93,12 @@ struct MacFirebaseSyncTile: View {
                 Text("Firebase Sync")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                 Spacer()
+                Button(action: { WindowManager.shared.showLogViewerWindow() }) {
+                    Label("Logs", systemImage: "terminal")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
                 syncBadge
             }
 

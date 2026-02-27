@@ -36,7 +36,7 @@ enum SyncStatus: Equatable {
 
     var label: String {
         switch self {
-        case .disconnected:       return "Not syncing"
+        case .disconnected:       return "Not signed in"
         case .connected:          return "Synced"
         case .error(let msg):     return "Error: \(msg)"
         }
@@ -52,7 +52,9 @@ class TaskStore: ObservableObject {
     @Published var mergedListSize: CGSize = CGSize(width: 350, height: 500)
     @Published var syncStatus: SyncStatus = .disconnected
 
-    private var cancellables = Set<AnyCancellable>()
+    private var listCancellables = Set<AnyCancellable>()
+    private var syncCancellables = Set<AnyCancellable>()
+    private var didSetupFirebaseSync = false
     private let savePath: URL
 
     // Firebase cloud sync manager (iOS only; macOS uses a no-op stub)
@@ -63,6 +65,8 @@ class TaskStore: ObservableObject {
     private var saveWorkItem: DispatchWorkItem?
     private var isApplyingRemoteData = false
     private var wasPreviouslySignedIn = false
+    private var awaitingInitialRemoteAfterSignIn = false
+    private var bootstrapUploadWorkItem: DispatchWorkItem?
 
     /// Tombstone set for deleted lists — persisted so deletions survive app restarts.
     private var deletedListIDs: [UUID: Date] = [:]
@@ -101,7 +105,10 @@ class TaskStore: ObservableObject {
     // MARK: - Setup
 
     private func setupFirebaseSync() {
-        print("🔵 [TaskStore] setupFirebaseSync() — attaching sync status observer")
+        if didSetupFirebaseSync { return }
+        didSetupFirebaseSync = true
+
+        print("🔵 [TaskStore] setupFirebaseSync() attaching observers")
         // Forward Firebase sync status to our published syncStatus
         firebaseSync.$syncStatus
             .receive(on: RunLoop.main)
@@ -113,8 +120,9 @@ class TaskStore: ObservableObject {
                 case .connected:          self.syncStatus = .connected
                 case .error(let msg):     self.syncStatus = .error(msg)
                 }
+                print("🔵 [TaskStore] syncStatus -> \(self.syncStatus.label)")
             }
-            .store(in: &cancellables)
+            .store(in: &syncCancellables)
 
         // Clear all local data when the user signs out.
         firebaseSync.$authState
@@ -124,20 +132,46 @@ class TaskStore: ObservableObject {
                 guard let self else { return }
                 switch authState {
                 case .signedIn:
+                    print("🔵 [TaskStore] authState -> signedIn")
                     self.wasPreviouslySignedIn = true
+                    self.firebaseSync.start()
+                    self.firebaseSync.forcePoll()
+                    self.awaitingInitialRemoteAfterSignIn = true
+                    self.bootstrapUploadWorkItem?.cancel()
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self else { return }
+                        guard self.awaitingInitialRemoteAfterSignIn else { return }
+                        self.awaitingInitialRemoteAfterSignIn = false
+
+                        // If no remote payload arrived shortly after sign-in, push local state once.
+                        let hasLocalData = !self.lists.isEmpty || !self.deletedListIDs.isEmpty
+                        guard hasLocalData else {
+                            print("🔵 [TaskStore] bootstrap upload skipped (no local data)")
+                            return
+                        }
+                        print("🔵 [TaskStore] bootstrap upload: no remote payload detected, uploading local snapshot")
+                        self.save()
+                    }
+                    self.bootstrapUploadWorkItem = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
                 case .signedOut:
+                    print("🟡 [TaskStore] authState -> signedOut")
+                    self.awaitingInitialRemoteAfterSignIn = false
+                    self.bootstrapUploadWorkItem?.cancel()
                     if self.wasPreviouslySignedIn {
                         self.clearAllLocalDataAfterSignOut()
                     }
                     self.wasPreviouslySignedIn = false
                 }
             }
-            .store(in: &cancellables)
+            .store(in: &syncCancellables)
 
         // When Firestore delivers data from another device, apply it
         firebaseSync.onReceivedData = { [weak self] data in
             guard let self else { return }
-            print("🔵 [TaskStore] onReceivedData — \(data.count) bytes from remote device")
+            print("🔵 [TaskStore] onReceivedData \(data.count) bytes")
+            self.awaitingInitialRemoteAfterSignIn = false
+            self.bootstrapUploadWorkItem?.cancel()
             self.isApplyingRemoteData = true
             self.applyData(data, save: true)
             // Note: isApplyingRemoteData is reset inside applyData's async block
@@ -175,10 +209,7 @@ class TaskStore: ObservableObject {
     }
 
     private func setupObservers() {
-        cancellables.removeAll()
-
-        // Re-attach Firebase sync observation after clearing cancellables
-        setupFirebaseSync()
+        listCancellables.removeAll()
 
         resubscribeListObservers()
     }
@@ -192,7 +223,7 @@ class TaskStore: ObservableObject {
                 .sink { [weak self] _ in
                     self?.objectWillChange.send()
                 }
-                .store(in: &cancellables)
+                .store(in: &listCancellables)
         }
     }
 

@@ -8,18 +8,19 @@ import FirebaseAuth
 import FirebaseFirestore
 
 // MARK: - FTMLog — thin logger that prefixes all messages with [FirebaseSyncManager]
-// All log lines are visible in Xcode console and in Console.app (filter by "FTM").
+// All log lines are visible in Xcode console, Console.app (filter by "FTM"),
+// and in the in-app Log Viewer window (macOS).
 private func ftmLog(_ msg: String, file: String = #file, line: Int = #line) {
     let filename = URL(fileURLWithPath: file).lastPathComponent
     print("🔵 [FTM:\(filename):\(line)] \(msg)")
 }
 private func ftmError(_ msg: String, file: String = #file, line: Int = #line) {
     let filename = URL(fileURLWithPath: file).lastPathComponent
-    print("🔴 [FTM:\(filename):\(line)] ❌ \(msg)")
+    print("🔴 [FTM:\(filename):\(line)] \(msg)")
 }
 private func ftmWarn(_ msg: String, file: String = #file, line: Int = #line) {
     let filename = URL(fileURLWithPath: file).lastPathComponent
-    print("🟡 [FTM:\(filename):\(line)] ⚠️ \(msg)")
+    print("🟡 [FTM:\(filename):\(line)] \(msg)")
 }
 
 // MARK: - FirebaseSyncManager (iOS — Firebase)
@@ -215,7 +216,7 @@ class FirebaseSyncManager: ObservableObject {
 
     // MARK: - Broadcast
 
-    func broadcast(data: Data) {
+    func broadcast(data: Data, allowAuthRetry: Bool = true) {
         guard let docRef = storeDocRef() else {
             ftmWarn("broadcast() skipped — no docRef (not signed in?)")
             return
@@ -427,6 +428,14 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     private var sseBuffer: String = ""
     private var pollTimer: Timer?
     private var lastKnownUpdatedAt: String?  // Firestore updatedAt — skips already-processed snapshots
+    private var isPollInFlight = false
+    private var consecutivePollFailures = 0
+    private var currentPollInterval: TimeInterval = 10
+
+    private static let minPollInterval: TimeInterval = 10
+    private static let maxPollInterval: TimeInterval = 90
+    private static let pollBackoffMultiplier: Double = 1.8
+    private static let visibleErrorThreshold = 3
 
     // Keychain keys
     private static let keychainRefreshTokenKey = "ftm.firebase.refreshToken"
@@ -445,9 +454,12 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
            let uid = Self.secureLoad(key: Self.keychainUIDKey, defaultsKey: Self.defaultsUIDKey) {
             currentUID = uid
             let email = Self.secureLoad(key: Self.keychainEmailKey, defaultsKey: Self.defaultsEmailKey) ?? uid
+            appLog("Restored saved sync session for uid=\(uid) email=\(email)")
             DispatchQueue.main.async {
                 self.authState = .signedIn(email: email)
             }
+        } else {
+            appWarn("No saved sync session found on launch (refresh token/uid missing)")
         }
     }
 
@@ -455,27 +467,32 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
     func start() {
         guard case .signedIn = authState else {
+            appWarn("start() skipped: authState is signedOut")
             DispatchQueue.main.async { self.syncStatus = .disconnected }
             return
         }
         guard !Self.projectId.isEmpty else {
+            appError("start() failed: PROJECT_ID missing")
             DispatchQueue.main.async {
                 self.syncStatus = .error("GoogleService-Info.plist missing PROJECT_ID.")
             }
             return
         }
+        appLog("start() beginning sync bootstrap for uid=\(currentUID ?? "nil")")
         refreshTokenThenListen()
     }
 
     func stop() {
         sseTask?.cancel()
         pollTimer?.invalidate()
+        pollTimer = nil
+        isPollInFlight = false
     }
 
     /// Force an immediate Firestore fetch (used by manual refresh button).
     func forcePoll() {
         guard let uid = currentUID else { return }
-        print("🔵 [macOS FirebaseSyncManager] forcePoll()")
+        appLog("forcePoll() — clearing dedup and re-fetching")
         lastKnownUpdatedAt = nil   // clear dedup so the next poll always re-applies
         pollFirestore(uid: uid)
     }
@@ -484,8 +501,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
     /// Sign in with email + password. Creates the account automatically if it doesn't exist.
     func signIn(email: String, password: String, completion: @escaping (Error?) -> Void) {
-        print("🔵 [macOS FirebaseSyncManager] signIn() started")
-        print("🔵 [macOS FirebaseSyncManager] projectId='\(Self.projectId)'")
+        appLog("signIn() started | projectId='\(Self.projectId)'")
 
         if Self.apiKey.isEmpty {
             let err = NSError(domain: "FirebaseSyncManager", code: -1, userInfo: [
@@ -517,7 +533,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
                 }
             case .failure(let err as NSError):
                 let msg = err.userInfo[NSLocalizedDescriptionKey] as? String ?? ""
-                print("🔴 [macOS FirebaseSyncManager] signIn failed: code=\(err.code) msg=\(msg)")
+                appError("signIn failed: code=\(err.code) msg=\(msg)")
 
                 // OPERATION_NOT_ALLOWED → Email/Password provider is disabled in Firebase console
                 if msg.contains("OPERATION_NOT_ALLOWED") {
@@ -539,7 +555,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
                 // EMAIL_NOT_FOUND → account doesn't exist yet, try creating it
                 if msg.contains("EMAIL_NOT_FOUND") {
-                    print("🔵 [macOS FirebaseSyncManager] email not found — attempting createUser")
+                    appLog("email not found — attempting createUser")
                     self.createUserREST(email: email, password: password) { [weak self] createResult in
                         guard let self else { return }
                         switch createResult {
@@ -554,7 +570,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
                                 self.attachListener()
                             }
                         case .failure(let createErr):
-                            print("🔴 [macOS FirebaseSyncManager] createUser failed: \(createErr.localizedDescription)")
+                            appError("createUser failed: \(createErr.localizedDescription)")
                             DispatchQueue.main.async {
                                 self.syncStatus = .error(createErr.localizedDescription)
                                 completion(createErr)
@@ -582,6 +598,8 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
         stop()
         currentUID = nil
         idToken    = nil
+        consecutivePollFailures = 0
+        currentPollInterval = Self.minPollInterval
         Self.secureDelete(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey)
         Self.secureDelete(key: Self.keychainUIDKey,          defaultsKey: Self.defaultsUIDKey)
         Self.secureDelete(key: Self.keychainEmailKey,        defaultsKey: Self.defaultsEmailKey)
@@ -594,12 +612,21 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
     // MARK: - Broadcast (Firestore REST PATCH)
 
-    func broadcast(data: Data) {
+    func broadcast(data: Data, allowAuthRetry: Bool = true) {
         guard let uid = currentUID,
               let jsonString = String(data: data, encoding: .utf8) else { return }
 
-        withFreshToken { [weak self] token in
-            guard let self, let token else { return }
+        withFreshToken { [weak self] tokenResult in
+            guard let self else { return }
+            guard case .success(let token) = tokenResult else {
+                if case .failure(let err) = tokenResult {
+                    DispatchQueue.main.async {
+                        self.syncStatus = .error("Sync auth failed: \(err.localizedDescription)")
+                    }
+                    appError("broadcast() token refresh failed: \(err.localizedDescription)")
+                }
+                return
+            }
             let deviceId = Self.deviceID
             let body: [String: Any] = [
                 "fields": [
@@ -617,14 +644,33 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = bodyData
 
-            URLSession.shared.dataTask(with: req) { [weak self] _, _, error in
+            URLSession.shared.dataTask(with: req) { [weak self] responseData, resp, error in
                 if let error {
                     DispatchQueue.main.async {
                         self?.syncStatus = .error(error.localizedDescription)
                     }
-                    print("❌ Firestore REST write error: \(error)")
-                } else {
-                    print("📤 Synced \(data.count) bytes via REST")
+                    appError("Firestore REST write error: \(error.localizedDescription)")
+                    return
+                }
+
+                if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    let raw = responseData.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+                    if (http.statusCode == 401 || http.statusCode == 403), allowAuthRetry {
+                        appWarn("Firestore write unauthorized (\(http.statusCode)); refreshing token and retrying once")
+                        self?.idToken = nil
+                        self?.broadcast(data: data, allowAuthRetry: false)
+                        return
+                    }
+                    appError("Firestore REST write HTTP \(http.statusCode): \(raw)")
+                    DispatchQueue.main.async {
+                        self?.syncStatus = .error("Firestore write HTTP \(http.statusCode)")
+                    }
+                    return
+                }
+
+                appLog("📤 Synced \(data.count) bytes via REST")
+                DispatchQueue.main.async {
+                    self?.syncStatus = .connected
                 }
             }.resume()
         }
@@ -634,18 +680,22 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
     private func refreshTokenThenListen() {
         guard let refreshToken = Self.secureLoad(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey) else {
+            appWarn("refreshTokenThenListen() aborted: no refresh token in secure storage")
             DispatchQueue.main.async { self.syncStatus = .disconnected }
             return
         }
+        appLog("refreshTokenThenListen() exchanging refresh token")
         exchangeRefreshToken(refreshToken) { [weak self] result in
             guard let self else { return }
             switch result {
             case .failure(let err):
+                appError("refreshTokenThenListen() failed: \(err.localizedDescription)")
                 DispatchQueue.main.async { self.syncStatus = .error(err.localizedDescription) }
             case .success(let info):
                 self.idToken      = info.idToken
                 self.idTokenExpiry = Date().addingTimeInterval(3500)
                 if self.currentUID == nil { self.currentUID = info.uid }
+                appLog("refreshTokenThenListen() success; attaching listener for uid=\(self.currentUID ?? info.uid)")
                 DispatchQueue.main.async {
                     self.attachListener()
                 }
@@ -653,21 +703,34 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
         }
     }
 
-    private func withFreshToken(_ block: @escaping (String?) -> Void) {
+    private func withFreshToken(_ block: @escaping (Result<String, Error>) -> Void) {
         if let token = idToken, Date() < idTokenExpiry {
-            block(token); return
+            block(.success(token)); return
         }
         guard let refreshToken = Self.secureLoad(key: Self.keychainRefreshTokenKey, defaultsKey: Self.defaultsRefreshTokenKey) else {
-            block(nil); return
+            let err = NSError(
+                domain: "FirebaseSyncManager",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Missing refresh token. Please sign in again."]
+            )
+            block(.failure(err))
+            return
         }
         exchangeRefreshToken(refreshToken) { [weak self] result in
-            guard let self else { block(nil); return }
+            guard let self else {
+                block(.failure(NSError(domain: "FirebaseSyncManager", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Sync manager deallocated"
+                ])))
+                return
+            }
             switch result {
-            case .failure: block(nil)
+            case .failure(let err):
+                self.idToken = nil
+                block(.failure(err))
             case .success(let info):
                 self.idToken = info.idToken
                 self.idTokenExpiry = Date().addingTimeInterval(3500)
-                block(info.idToken)
+                block(.success(info.idToken))
             }
         }
     }
@@ -688,7 +751,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     }
 
     private func performAuthREST(urlStr: String, body: [String: Any], completion: @escaping (Result<AuthRESTInfo, Error>) -> Void) {
-        print("🔵 [macOS performAuthREST] URL: \(urlStr)")
+        appLog("performAuthREST URL: \(urlStr)")
         var req = URLRequest(url: URL(string: urlStr)!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -699,7 +762,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
         URLSession.shared.dataTask(with: req) { data, response, error in
             if let httpResp = response as? HTTPURLResponse {
-                print("🔵 [macOS performAuthREST] HTTP status: \(httpResp.statusCode)")
+                appLog("performAuthREST HTTP status: \(httpResp.statusCode)")
             }
             if let error { completion(.failure(error)); return }
             guard let data else {
@@ -716,8 +779,7 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
             // Firebase Auth REST returns error details in json["error"]["message"]
             if let errorObj = json["error"] as? [String: Any],
                let message = errorObj["message"] as? String {
-                print("🔴 [macOS performAuthREST] Error message: \(message)")
-                print("🔴 [macOS performAuthREST] Full error: \(errorObj)")
+                appError("performAuthREST error message: \(message) | full: \(errorObj)")
                 completion(.failure(NSError(domain: "FirebaseSyncManager", code: (errorObj["code"] as? Int) ?? 400,
                     userInfo: [NSLocalizedDescriptionKey: message])))
                 return
@@ -763,24 +825,72 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
     private func attachListener() {
         guard let uid = currentUID else { return }
         DispatchQueue.main.async { self.syncStatus = .connected }
-        print("🔑 Firestore REST listener attached for uid \(uid)")
+        appLog("Firestore REST listener attached for uid \(uid)")
         startSSE(uid: uid)
     }
 
     private func startSSE(uid: String) {
         sseTask?.cancel()
-        // Use polling every 10 s as a reliable cross-platform alternative to SSE streaming
+        // Use polling as a reliable cross-platform alternative to SSE streaming.
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            self?.pollFirestore(uid: uid)
-        }
+        currentPollInterval = Self.minPollInterval
+        consecutivePollFailures = 0
+        isPollInFlight = false
         // Immediate first fetch
         pollFirestore(uid: uid)
     }
 
-    private func pollFirestore(uid: String) {
-        withFreshToken { [weak self] token in
-            guard let self, let token else { return }
+    private func scheduleNextPoll(uid: String, after delay: TimeInterval? = nil) {
+        pollTimer?.invalidate()
+        let nextDelay = max(1, delay ?? currentPollInterval)
+        pollTimer = Timer.scheduledTimer(withTimeInterval: nextDelay, repeats: false) { [weak self] _ in
+            self?.pollFirestore(uid: uid)
+        }
+    }
+
+    private func markPollSuccess(uid: String) {
+        consecutivePollFailures = 0
+        currentPollInterval = Self.minPollInterval
+        DispatchQueue.main.async { self.syncStatus = .connected }
+        scheduleNextPoll(uid: uid)
+    }
+
+    private func markPollFailure(uid: String, userMessage: String, debugMessage: String) {
+        consecutivePollFailures += 1
+        currentPollInterval = min(Self.maxPollInterval, max(Self.minPollInterval, currentPollInterval * Self.pollBackoffMultiplier))
+        if consecutivePollFailures >= Self.visibleErrorThreshold {
+            DispatchQueue.main.async { self.syncStatus = .error(userMessage) }
+        } else {
+            appWarn("Transient sync issue (\(consecutivePollFailures)/\(Self.visibleErrorThreshold)): \(debugMessage)")
+        }
+        scheduleNextPoll(uid: uid)
+    }
+
+    private func pollFirestore(uid: String, allowAuthRetry: Bool = true) {
+        if isPollInFlight {
+            return
+        }
+        isPollInFlight = true
+
+        withFreshToken { [weak self] tokenResult in
+            guard let self else { return }
+            guard case .success(let token) = tokenResult else {
+                self.isPollInFlight = false
+                if case .failure(let err) = tokenResult {
+                    self.markPollFailure(
+                        uid: uid,
+                        userMessage: "Sync auth failed. Please sign in again.",
+                        debugMessage: "token refresh failed: \(err.localizedDescription)"
+                    )
+                } else {
+                    self.markPollFailure(
+                        uid: uid,
+                        userMessage: "Sync auth failed. Please sign in again.",
+                        debugMessage: "token refresh failed"
+                    )
+                }
+                return
+            }
             let path = "projects/\(Self.projectId)/databases/(default)/documents/users/\(uid)/store/snapshot"
             let urlStr = "https://firestore.googleapis.com/v1/\(path)"
             var req = URLRequest(url: URL(string: urlStr)!)
@@ -788,28 +898,60 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
 
             URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
                 guard let self else { return }
+                self.isPollInFlight = false
+
                 if let error {
-                    print("❌ Firestore poll error: \(error)")
-                    DispatchQueue.main.async { self.syncStatus = .error("Firestore poll failed: \(error.localizedDescription)") }
+                    self.markPollFailure(
+                        uid: uid,
+                        userMessage: "Network unavailable. Retrying…",
+                        debugMessage: "Firestore poll error: \(error.localizedDescription)"
+                    )
                     return
                 }
                 if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
-                    print("❌ Firestore poll HTTP \(http.statusCode): \(raw)")
-                    DispatchQueue.main.async { self.syncStatus = .error("Firestore poll HTTP \(http.statusCode)") }
+
+                    if (http.statusCode == 401 || http.statusCode == 403), allowAuthRetry {
+                        appWarn("Firestore poll unauthorized (\(http.statusCode)); refreshing token and retrying once")
+                        self.idToken = nil
+                        self.pollFirestore(uid: uid, allowAuthRetry: false)
+                        return
+                    }
+
+                    // Missing document is expected before first successful sync write.
+                    if http.statusCode == 404, raw.contains("\"status\": \"NOT_FOUND\"") {
+                        appLog("Firestore snapshot does not exist yet (uid=\(uid)); waiting for first write")
+                        self.markPollSuccess(uid: uid)
+                        return
+                    }
+                    self.markPollFailure(
+                        uid: uid,
+                        userMessage: "Sync server returned HTTP \(http.statusCode). Retrying…",
+                        debugMessage: "Firestore poll HTTP \(http.statusCode): \(raw)"
+                    )
                     return
                 }
                 guard let data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let fields = json["fields"] as? [String: Any],
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else {
+                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+                    self.markPollFailure(
+                        uid: uid,
+                        userMessage: "Sync response parse failed. Retrying…",
+                        debugMessage: "Firestore poll parse error: \(raw)"
+                    )
+                    return
+                }
+
+                // A successfully fetched document may still be effectively empty for our schema.
+                guard let fields = json["fields"] as? [String: Any],
                       let payloadField = fields["payload"] as? [String: Any],
                       let jsonString = payloadField["stringValue"] as? String,
                       let deviceIdField = fields["deviceId"] as? [String: Any],
                       let deviceId = deviceIdField["stringValue"] as? String
                 else {
-                    let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
-                    print("❌ Firestore poll parse error: \(raw)")
-                    DispatchQueue.main.async { self.syncStatus = .error("Firestore snapshot parse failed.") }
+                    appLog("Firestore snapshot has no payload/deviceId yet (uid=\(uid)); waiting for next update")
+                    self.markPollSuccess(uid: uid)
                     return
                 }
 
@@ -817,16 +959,23 @@ class FirebaseSyncManager: NSObject, ObservableObject, URLSessionDataDelegate {
                 let updatedAt = (json["updateTime"] as? String) ?? (json["createTime"] as? String) ?? ""
 
                 // Skip if this was written by this Mac
-                guard deviceId != Self.deviceID else { return }
+                guard deviceId != Self.deviceID else {
+                    self.markPollSuccess(uid: uid)
+                    return
+                }
                 // Skip if we already processed this exact snapshot version
-                guard updatedAt != self.lastKnownUpdatedAt else { return }
+                guard updatedAt != self.lastKnownUpdatedAt else {
+                    self.markPollSuccess(uid: uid)
+                    return
+                }
 
                 guard let payload = jsonString.data(using: .utf8) else { return }
                 self.lastKnownUpdatedAt = updatedAt
-                print("📥 Received \(payload.count) bytes from Firestore REST (device: \(deviceId), updatedAt: \(updatedAt))")
+                appLog("📥 Received \(payload.count) bytes from Firestore REST (device: \(deviceId), updatedAt: \(updatedAt))")
                 DispatchQueue.main.async {
                     self.onReceivedData?(payload)
                 }
+                self.markPollSuccess(uid: uid)
             }.resume()
         }
     }

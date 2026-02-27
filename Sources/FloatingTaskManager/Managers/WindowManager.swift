@@ -13,6 +13,7 @@ class WindowManager: NSObject, ObservableObject {
     private var windows: [UUID: NSWindow] = [:]
     private var floatingButtonID: UUID?
     private var settingsWindow: NSWindow?
+    private var logViewerWindow: NSWindow?
     #endif
     // Published set of open list IDs so views can observe open/close state
     @Published private(set) var openWindowIDs: Set<UUID> = []
@@ -302,6 +303,44 @@ class WindowManager: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
                 self?.settingsWindow = nil
+        }
+        #endif
+    }
+
+    func showLogViewerWindow() {
+        #if os(macOS)
+        AppLogger.shared.clearUnread()
+
+        if let existing = logViewerWindow {
+            existing.makeKeyAndOrderFront(nil)
+            existing.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 520),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.center()
+        window.title = "Sync Logs"
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.minSize = NSSize(width: 600, height: 360)
+        window.titlebarAppearsTransparent = true
+
+        window.contentView = NSHostingView(rootView: LogViewerView())
+
+        self.logViewerWindow = window
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                self?.logViewerWindow = nil
         }
         #endif
     }

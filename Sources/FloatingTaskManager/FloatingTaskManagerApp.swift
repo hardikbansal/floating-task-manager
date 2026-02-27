@@ -47,6 +47,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Run as accessory - no dock icon, stays floating
         NSApp.setActivationPolicy(.accessory)
 
+        appLog("App launched — FloatingTaskManager starting up")
+
         WindowManager.shared.setTaskStore(store)
         WindowManager.shared.showFloatingButton()
         requestNotificationPermission()
@@ -117,7 +119,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Hide All Windows", action: #selector(hideAllWindows), keyEquivalent: "h"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
-        
+        menu.addItem(NSMenuItem(title: "View Logs...", action: #selector(openLogs), keyEquivalent: "l"))
+
         // Move to Monitor Menu
         let screens = NSScreen.screens
         if screens.count > 1 {
@@ -160,6 +163,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         WindowManager.shared.showSettingsWindowManual()
+    }
+
+    @objc private func openLogs() {
+        WindowManager.shared.showLogViewerWindow()
     }
 
     @objc private func moveToScreen(_ sender: NSMenuItem) {
@@ -250,8 +257,10 @@ struct FloatingTaskManagerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegateIOS.self) var appDelegate
     #endif
 
+    #if os(iOS)
     @StateObject var store = TaskStore()
     @StateObject var windowManager = WindowManager.shared
+    #endif
 
     var body: some Scene {
         #if os(macOS)
