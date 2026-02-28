@@ -182,7 +182,8 @@ struct MacFirebaseSyncTile: View {
                 errorMessage = error.localizedDescription
             } else {
                 password = ""
-                store.firebaseSync.start()
+                // start() + forcePoll() are called by the TaskStore authState subscriber
+                // when authState transitions to .signedIn — no need to call them here.
             }
         }
     }

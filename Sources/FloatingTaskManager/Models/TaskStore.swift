@@ -134,6 +134,10 @@ class TaskStore: ObservableObject {
                 case .signedIn:
                     print("🔵 [TaskStore] authState -> signedIn")
                     self.wasPreviouslySignedIn = true
+                    // After logout, local data was wiped. The Firestore snapshot may
+                    // have been written by this same device before logout — we still
+                    // need it back, so tell FirebaseSyncManager to skip the deviceId filter.
+                    self.firebaseSync.skipDeviceCheckOnNextPoll = true
                     self.firebaseSync.start()
                     self.firebaseSync.forcePoll()
                     self.awaitingInitialRemoteAfterSignIn = true
@@ -168,8 +172,11 @@ class TaskStore: ObservableObject {
 
         // When Firestore delivers data from another device, apply it
         firebaseSync.onReceivedData = { [weak self] data in
-            guard let self else { return }
-            print("🔵 [TaskStore] onReceivedData \(data.count) bytes")
+            guard let self else {
+                print("🔴 [TaskStore] onReceivedData — self is nil, cannot apply!")
+                return
+            }
+            print("🔵 [TaskStore] onReceivedData \(data.count) bytes — will apply and save")
             self.awaitingInitialRemoteAfterSignIn = false
             self.bootstrapUploadWorkItem?.cancel()
             self.isApplyingRemoteData = true
@@ -177,6 +184,7 @@ class TaskStore: ObservableObject {
             // Note: isApplyingRemoteData is reset inside applyData's async block
         }
 
+        print("🔵 [TaskStore] setupFirebaseSync() — calling firebaseSync.start() (initial)")
         firebaseSync.start()
     }
 
@@ -201,7 +209,13 @@ class TaskStore: ObservableObject {
     }
 
     /// Reload from disk without triggering a save or broadcast.
+    /// Skipped if a remote merge is currently in-flight to avoid reverting
+    /// just-received data before it has been persisted.
     private func loadFromDiskOnly() {
+        guard !isApplyingRemoteData else {
+            print("🟡 [TaskStore] loadFromDiskOnly() — skipped (remote merge in progress)")
+            return
+        }
         guard FileManager.default.fileExists(atPath: savePath.path),
               let data = try? Data(contentsOf: savePath) else { return }
         print("🔵 [TaskStore] loadFromDiskOnly() — \(data.count) bytes")
@@ -209,8 +223,12 @@ class TaskStore: ObservableObject {
     }
 
     private func setupObservers() {
+        // Re-subscribe all list observers from scratch.
+        // This is safe here because it's only called when the full `lists` array
+        // is rebuilt (createNewList / deleteList).  The brief window between
+        // removeAll and resubscribe is on the main thread, so no concurrent
+        // objectWillChange can fire on another thread during that span.
         listCancellables.removeAll()
-
         resubscribeListObservers()
     }
 
@@ -229,17 +247,17 @@ class TaskStore: ObservableObject {
 
     // MARK: - Save
 
-    func save() {
+    func save(completion: (() -> Void)? = nil) {
         // Debounce: coalesce rapid saves into one write
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
-            self?.performSave()
+            self?.performSave(completion: completion)
         }
         saveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
 
-    private func performSave() {
+    private func performSave(completion: (() -> Void)? = nil) {
         do {
             let data = try encodeStore()
             try data.write(to: savePath, options: .atomic)
@@ -254,9 +272,11 @@ class TaskStore: ObservableObject {
                 print("🔵 [TaskStore] broadcasting \(data.count) bytes to Firebase …")
                 firebaseSync.broadcast(data: data)
             }
+            completion?()
         } catch {
             print("🔴 [TaskStore] Save error: \(error)")
             syncStatus = .error(error.localizedDescription)
+            completion?()
         }
     }
 
@@ -300,8 +320,13 @@ class TaskStore: ObservableObject {
                     #if os(iOS)
                     self.writeWidgetSnapshot()
                     #endif
-                    if save { self.performSave() }
-                    self.isApplyingRemoteData = false
+                    if save {
+                        self.save {
+                            self.isApplyingRemoteData = false
+                        }
+                    } else {
+                        self.isApplyingRemoteData = false
+                    }
                 }
             } else {
                 print("🔴 [TaskStore] applyData() — could not decode data in any known format")
@@ -311,8 +336,13 @@ class TaskStore: ObservableObject {
         }
         print("🔵 [TaskStore] applyData() — decoded StoreWrapper with \(wrapper.lists.count) lists")
         DispatchQueue.main.async {
-            self.mergeRemoteWrapper(wrapper, save: save)
-            self.isApplyingRemoteData = false
+            // Keep isApplyingRemoteData = true through mergeRemoteWrapper so that
+            // the debounced performSave() (0.3 s later) still sees the flag and
+            // skips the echo broadcast back to Firestore.  The flag is cleared
+            // inside a completion block that fires only after performSave() runs.
+            self.mergeRemoteWrapper(wrapper, save: save) {
+                self.isApplyingRemoteData = false
+            }
         }
     }
 
@@ -323,10 +353,15 @@ class TaskStore: ObservableObject {
     ///  - Lists that only exist locally AND are not tombstoned remotely → keep locally
     ///  - Lists that exist on both sides → merge field-by-field: newer lastModified wins
     ///  - Items inside a list: same tombstone + lastModified rules per item
-    private func mergeRemoteWrapper(_ remote: StoreWrapper, save: Bool) {
-        // 1. Union tombstones — a deletion on any device wins permanently
+    private func mergeRemoteWrapper(_ remote: StoreWrapper, save: Bool, completion: (() -> Void)? = nil) {
+        // 0. Prune old tombstones to prevent unbounded payload growth
+        pruneTombstones()
+
+        // 1. Union tombstones — a deletion on any device wins permanently.
+        //    Keep the earliest deletion time (first-delete-wins) so that garbage
+        //    collection based on age works correctly once it is added.
         let mergedDeletedLists = deletedListIDs.merging(remote.deletedListIDs) { local, remote in
-            max(local, remote)  // keep the earlier deletion time (first delete wins)
+            min(local, remote)  // keep the earlier (first) deletion time
         }
         deletedListIDs = mergedDeletedLists
 
@@ -347,7 +382,7 @@ class TaskStore: ObservableObject {
                     localList.lastModified   = remoteList.lastModified
                 }
                 // Merge item tombstones then items
-                let mergedItemTombstones = localList.deletedItemIDs.merging(remoteList.deletedItemIDs) { max($0, $1) }
+                let mergedItemTombstones = localList.deletedItemIDs.merging(remoteList.deletedItemIDs) { min($0, $1) }
                 localList.deletedItemIDs = mergedItemTombstones
                 localList.items = mergeItems(local: localList.items,
                                              remote: remoteList.items,
@@ -400,39 +435,66 @@ class TaskStore: ObservableObject {
         #endif
 
         self.resubscribeListObservers()
-        if save { self.performSave() }
+        if save { self.save(completion: completion) } else { completion?() }
     }
 
     /// Merge two item arrays by id; tombstones win over everything, then newer lastModified wins.
+    /// Ordering: local order is preserved when local data is at least as recent as remote;
+    /// remote order is used only for items that don't exist locally.
     private func mergeItems(local: [TaskItem], remote: [TaskItem], deletedIDs: [UUID: Date]) -> [TaskItem] {
-        var localById: [UUID: TaskItem] = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
-        var merged: [TaskItem] = []
+        let remoteById: [UUID: TaskItem] = Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) })
+        let localIDs = Set(local.map { $0.id })
+        var remoteOnlyItems: [TaskItem] = []  // items that exist only on remote side, in remote order
 
+        // Collect remote-only items (not tombstoned, not present locally)
         for remoteItem in remote {
-            // If tombstoned, skip entirely
             if deletedIDs[remoteItem.id] != nil { continue }
+            if !localIDs.contains(remoteItem.id) {
+                remoteOnlyItems.append(remoteItem)
+            }
+        }
 
-            if let localItem = localById[remoteItem.id] {
+        // Walk local order first — this preserves any user-reordering done on this device
+        var merged: [TaskItem] = []
+        for localItem in local {
+            // Skip tombstoned items
+            if deletedIDs[localItem.id] != nil { continue }
+
+            if let remoteItem = remoteById[localItem.id] {
+                // Both sides have this item — pick winner by timestamp
                 if remoteItem.lastModified > localItem.lastModified {
                     merged.append(remoteItem)
                 } else if localItem.lastModified > remoteItem.lastModified {
                     merged.append(localItem)
                 } else {
-                    // Timestamp tie: prefer remote when payload differs so cloud-originated
-                    // edits still apply even if lastModified wasn't bumped upstream.
+                    // Timestamp tie: prefer remote when payload differs
                     merged.append(remoteItem == localItem ? localItem : remoteItem)
                 }
-                localById.removeValue(forKey: remoteItem.id)
             } else {
-                merged.append(remoteItem)
+                // Local-only item — keep it
+                merged.append(localItem)
             }
         }
-        // Items only in local — keep unless tombstoned
-        for (id, localItem) in localById {
-            if deletedIDs[id] != nil { continue }
-            merged.append(localItem)
-        }
+
+        // Append remote-only items (new items from the other device) at the end
+        merged.append(contentsOf: remoteOnlyItems)
         return merged
+    }
+
+    // MARK: - Tombstone GC
+
+    /// Prune tombstone entries that are older than `maxAge`.
+    /// Safe to call on both list-level and item-level tombstone maps.
+    /// Tombstones must be kept long enough so that an offline device can come back
+    /// online and still receive the deletion — 30 days is a generous window.
+    private static let tombstoneMaxAge: TimeInterval = 30 * 24 * 60 * 60  // 30 days
+
+    private func pruneTombstones() {
+        let cutoff = Date().addingTimeInterval(-Self.tombstoneMaxAge)
+        deletedListIDs = deletedListIDs.filter { $0.value > cutoff }
+        for list in lists {
+            list.deletedItemIDs = list.deletedItemIDs.filter { $0.value > cutoff }
+        }
     }
 
     // MARK: - Manual Refresh
